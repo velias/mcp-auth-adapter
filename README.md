@@ -1,6 +1,7 @@
 # MCP Auth Adapter
 
 [![CI](https://github.com/velias/mcp-auth-adapter/actions/workflows/ci.yml/badge.svg)](https://github.com/velias/mcp-auth-adapter/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-check%20CI-brightgreen)](https://github.com/velias/mcp-auth-adapter/actions/workflows/ci.yml)
 
 An OAuth/OIDC authentication adapter for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) clients. It sits in front of any OAuth 2.0 / OIDC upstream IdP that serves standard discovery metadata -- such as Keycloak, Auth0, Okta, Azure AD (Entra ID), Google Identity, or any provider serving standard OAuth 2.0 / OIDC discovery metadata -- and provides functionality required by the [MCP Authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) for the most common MCP clients (Claude Code/Desktop, Cursor IDE, ChatGPT, Gemini CLI, VS Code, ...) and [their known problematic behaviours](#known-mcp-client-behaviors).
 

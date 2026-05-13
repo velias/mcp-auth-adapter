@@ -14,8 +14,8 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -26,8 +26,8 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -41,8 +41,8 @@ jobs:
       matrix:
         node-version: [18, 20, 22]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -55,14 +55,14 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npm test -- --coverage
-      - uses: MishaKav/jest-coverage-comment@v1
+      - uses: MishaKav/jest-coverage-comment@v1.0.32
         if: github.event_name == 'pull_request'
         with:
           coverage-summary-path: coverage/coverage-summary.json
