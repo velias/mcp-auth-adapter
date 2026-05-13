@@ -1,0 +1,49 @@
+{
+  "name": "mcp-auth-adapter",
+  "version": "0.1.0",
+  "description": "OAuth/OIDC authentication adapter for MCP clients",
+  "main": "dist/index.js",
+  "bin": {
+    "mcp-auth-adapter": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "test": "jest",
+    "lint": "eslint src/ test/",
+    "lint:fix": "eslint src/ test/ --fix"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/velias/mcp-auth-adapter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/velias/mcp-auth-adapter/issues"
+  },
+  "homepage": "https://github.com/velias/mcp-auth-adapter#readme",
+  "dependencies": {
+    "compression": "^1.8.1",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/compression": "^1.8.1",
+    "@types/express": "^5.0.0",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^22.0.0",
+    "@types/supertest": "^6.0.0",
+    "eslint": "^10.2.1",
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0",
+    "ts-jest": "^29.2.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.59.0"
+  }
+}
