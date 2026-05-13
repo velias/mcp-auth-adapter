@@ -62,7 +62,26 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test -- --coverage
-      - uses: MishaKav/jest-coverage-comment@v1.0.32
+      - name: Coverage comment
+        id: coverage
+        uses: MishaKav/jest-coverage-comment@v1.0.32
         if: github.event_name == 'pull_request'
         with:
           coverage-summary-path: coverage/coverage-summary.json
+      - name: Coverage badge
+        if: github.ref == 'refs/heads/main'
+        uses: MishaKav/jest-coverage-comment@v1.0.32
+        id: coverage-main
+        with:
+          coverage-summary-path: coverage/coverage-summary.json
+          hide-comment: true
+      - name: Update badge gist
+        if: github.ref == 'refs/heads/main'
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.GIST_SECRET }}
+          gistID: ${{ vars.COVERAGE_GIST_ID }}
+          filename: mcp-auth-adapter-coverage.json
+          label: coverage
+          message: ${{ steps.coverage-main.outputs.coverage }}%
+          color: ${{ steps.coverage-main.outputs.color }}
