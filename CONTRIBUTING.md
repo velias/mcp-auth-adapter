@@ -96,6 +96,16 @@ ESLint uses [typescript-eslint](https://typescript-eslint.io/) with type-aware r
 
 - **TypeScript strict mode.** No `any` in production code.
 - **Structured logging** — use `logger` from `src/logger.ts`, not `console.*`.
+  - `info` — lifecycle events (startup, shutdown, upstream refresh success).
+  - `warn` — recoverable failures (upstream fetch failed, config conflicts, IdP compatibility issues).
+  - `error` — unrecoverable or unexpected failures (unhandled request errors, fatal startup errors).
+  - `debug` — per-request detail (method, path, IP, user-agent) — only emitted when `MCP_DEBUG=true`.
+- **Metrics** — the adapter uses zero-dependency Prometheus metrics (`src/metrics.ts`). When adding instrumentation:
+  - Prefix application metrics with `mcp_auth_` (e.g. `mcp_auth_new_feature_total`).
+  - Keep label cardinality bounded — use fixed route patterns or enum values, never user-supplied input.
+  - To instrument a new route: mount `metricsMiddleware` alongside the router in `app.ts`.
+  - To add domain-specific metrics: accept `IMetricsRegistry` from the caller, create counters/gauges/histograms from it. The no-op registry ensures zero overhead when metrics are disabled.
+  - Do not add external metrics dependencies — the zero-dependency approach is deliberate.
 - **OAuth error responses** follow RFC format (`{ error, error_description }`).
 - **Tests** — upstream OIDC docs are mocked inline in each test file. Auto-enable behavior (404 when a feature is not configured) must be covered.
 

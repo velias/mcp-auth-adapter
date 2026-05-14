@@ -46,8 +46,10 @@ src/
   app.ts             # Express app factory, middleware ordering, UpstreamState
   config.ts          # AppConfig type + loadConfig() from MCP_* env vars
   logger.ts          # Structured line logger (ts= level= msg= ...)
+  metrics.ts         # Prometheus metrics primitives (Counter, Gauge, Histogram, Registry, no-op stubs)
   middleware/
     security.ts      # requireJsonContentType (Content-Type guard for DCR)
+    metrics.ts       # Per-router HTTP request counting and latency middleware
   cimd.ts            # CIMD URL validation, document fetch/validation, cache, resolution (EXPERIMENTAL)
   routes/
     well-known.ts    # /.well-known/* — filtered upstream OIDC metadata
@@ -55,6 +57,7 @@ src/
     authorize.ts     # GET /authorize — redirect adapter, scope filtering, CIMD client_id substitution
     token.ts         # POST /token — token endpoint proxy with CIMD client_id substitution (EXPERIMENTAL)
     health.ts        # /health/live, /health/ready
+    metrics.ts       # GET /metrics — Prometheus text exposition format endpoint
 test/
   well-known.test.ts # Well-known doc content, whitelist, cache-control, refresh, CIMD fields
   register.test.ts   # DCR response, content-type guard, feature flag
@@ -63,6 +66,7 @@ test/
   cimd.test.ts       # CIMD URL/doc validation, cache, resolution, IP checks
   cimd-fetch.test.ts # CIMD fetch with mocked HTTP: SSRF, size, timeout, content-type
   health.test.ts     # Liveness/readiness probes
+  metrics.test.ts    # Metrics primitives, no-op stubs, /metrics endpoint, config parsing
 ```
 
 ## Architecture notes
@@ -74,7 +78,8 @@ test/
   `express.json()` so probes avoid body parsing.
 - **No explicit feature flags.** All optional features (DCR, authorize proxy,
   CIMD) auto-enable based on the presence of their configuration — see
-  "Key responsibilities" above.
+  "Key responsibilities" above. Exception: `MCP_METRICS_ENABLED` (default
+  `true`) explicitly controls the metrics subsystem.
 - **`UpstreamState`** holds the cached well-known document (already
   filtered/merged for clients), the raw `upstreamAuthorizationEndpoint` URL
   (used by the authorize redirect), and `upstreamTokenEndpoint` (used by the
@@ -93,6 +98,18 @@ test/
   overridden. `validateUpstreamDoc()` (also in `src/routes/well-known.ts`) is
   called at startup and on periodic refresh to emit `Upstream IdP compatibility:`
   warnings when the upstream metadata is missing or incomplete for MCP.
+- **Metrics subsystem.** `src/metrics.ts` provides zero-dependency Prometheus
+  primitives (Counter, Gauge, Histogram) behind `ICounter`/`IGauge`/`IHistogram`
+  interfaces. `createMetricsRegistry(enabled)` returns a real `Registry` or a
+  `NoopRegistry` with stub methods, so instrumentation call sites are
+  unconditional. HTTP metrics middleware is mounted per-router (only functional
+  routes), not globally. The `/metrics` endpoint serializes to Prometheus text
+  exposition format on demand.
+- **Logging.** `src/logger.ts` provides a structured key=value logger writing
+  to stdout (info, debug) and stderr (warn, error). `createLogger(debugEnabled)`
+  returns a `Logger` with `info`, `warn`, `error`, `debug` methods. Debug logs
+  are gated by `MCP_DEBUG`. Never use `console.*` directly — always use the
+  `logger` instance.
 
 ## Configuration
 
@@ -103,6 +120,8 @@ Key ones: `MCP_BASE_URL`, `MCP_UPSTREAM_SSO_URL`, `MCP_PROXY_DCR_CLIENT_ID`,
 
 CIMD (EXPERIMENTAL): `MCP_PROXY_CIMD_MAP`, `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID`,
 `MCP_PROXY_CIMD_CACHE_MINUTES`.
+
+Observability: `MCP_METRICS_ENABLED`.
 
 Lifecycle: `MCP_SHUTDOWN_TIMEOUT_SECONDS`.
 
@@ -135,4 +154,14 @@ npm run lint:fix     # ESLint auto-fix
 - ESLint `recommendedTypeChecked` rules; `no-unsafe-*` rules are relaxed in
   `test/**`.
 - Structured logging — use `logger` from `src/logger.ts`, not `console.*`.
+  Use `info` for lifecycle events and success paths, `warn` for recoverable
+  failures and config issues, `error` for unrecoverable or unexpected failures,
+  `debug` for per-request detail (gated by `MCP_DEBUG`).
+- Metrics — all application metric names use the `mcp_auth_` prefix; process
+  metrics (`process_*`, `nodejs_*`) are un-prefixed per convention. New metrics
+  must use bounded label cardinality (fixed route patterns, enum values — never
+  user input). To instrument a new route: add `metricsMiddleware` in `app.ts`
+  alongside the router mount. To add domain-specific metrics: accept
+  `IMetricsRegistry` in the module, create counters/gauges/histograms from it.
+  No external metrics dependencies — the zero-dependency approach is deliberate.
 - OAuth error responses follow RFC format (`{ error, error_description }`).

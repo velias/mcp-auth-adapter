@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import express from 'express';
 import { Logger, requestMeta } from '../logger';
 import { isCimdClientId, validateCimdUrl, resolveUpstreamClientId, sanitizeForError } from '../cimd';
+import { IMetricsRegistry, ICounter, IHistogram } from '../metrics';
 
 const TOKEN_UPSTREAM_TIMEOUT_MS = 10000;
 const TOKEN_UPSTREAM_MAX_RESPONSE_BYTES = 64 * 1024;
@@ -16,8 +17,12 @@ export function createTokenRouter(
   getUpstreamTokenEndpoint: () => string,
   cimdResolver: TokenCimdResolver,
   logger: Logger,
+  metricsRegistry?: IMetricsRegistry,
 ): Router {
   const router = Router();
+
+  const upstreamDuration = metricsRegistry?.createHistogram('mcp_auth_token_proxy_upstream_duration_seconds', 'Token proxy upstream request duration in seconds');
+  const upstreamStatus = metricsRegistry?.createCounter('mcp_auth_token_proxy_upstream_status_total', 'Token proxy upstream response status codes');
 
   const urlencodedParser = express.urlencoded({ extended: false, limit: '16kb' });
 
@@ -32,7 +37,7 @@ export function createTokenRouter(
     }
     next();
   }, urlencodedParser, (req: Request, res: Response) => {
-    void handleTokenRequest(req, res, getUpstreamTokenEndpoint, cimdResolver, logger);
+    void handleTokenRequest(req, res, getUpstreamTokenEndpoint, cimdResolver, logger, upstreamDuration, upstreamStatus);
   });
 
   return router;
@@ -44,6 +49,8 @@ async function handleTokenRequest(
   getUpstreamTokenEndpoint: () => string,
   cimdResolver: TokenCimdResolver,
   logger: Logger,
+  upstreamDuration?: IHistogram,
+  upstreamStatusCounter?: ICounter,
 ): Promise<void> {
   try {
     const body = req.body as Record<string, string>;
@@ -92,6 +99,7 @@ async function handleTokenRequest(
 
     const upstreamUrl = getUpstreamTokenEndpoint();
     let upstreamResponse: globalThis.Response;
+    const fetchStart = process.hrtime.bigint();
     try {
       upstreamResponse = await fetch(upstreamUrl, {
         method: 'POST',
@@ -100,7 +108,12 @@ async function handleTokenRequest(
         redirect: 'error',
         signal: AbortSignal.timeout(TOKEN_UPSTREAM_TIMEOUT_MS),
       });
+      const fetchDuration = Number(process.hrtime.bigint() - fetchStart) / 1e9;
+      upstreamDuration?.observe(fetchDuration);
+      upstreamStatusCounter?.inc({ status: String(upstreamResponse.status) });
     } catch (err) {
+      const fetchDuration = Number(process.hrtime.bigint() - fetchStart) / 1e9;
+      upstreamDuration?.observe(fetchDuration);
       logger.error('token proxy: upstream request failed', { error: String(err) });
       res.status(502).json({
         error: 'server_error',

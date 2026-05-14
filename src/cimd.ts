@@ -1,4 +1,5 @@
 import * as dns from 'dns';
+import { ICounter, IGauge, IMetricsRegistry } from './metrics';
 
 export interface CimdDocument {
   client_id: string;
@@ -316,23 +317,40 @@ export class CimdCache {
   private readonly ttlMs: number;
   private readonly pinnedUrls: Set<string>;
   private readonly maxUnpinnedSize: number;
+  private readonly opsCounter: ICounter;
+  private readonly evictionsCounter: ICounter;
+  private readonly sizeGauge: IGauge;
 
   constructor(options: {
     ttlMinutes: number;
     pinnedUrls: Set<string>;
     maxUnpinnedSize?: number;
+    metricsRegistry?: IMetricsRegistry;
   }) {
     this.ttlMs = options.ttlMinutes * 60 * 1000;
     this.pinnedUrls = options.pinnedUrls;
     this.maxUnpinnedSize = options.maxUnpinnedSize ?? 1000;
+
+    const reg = options.metricsRegistry;
+    if (reg) {
+      this.opsCounter = reg.createCounter('mcp_auth_cimd_cache_operations_total', 'CIMD cache operations');
+      this.evictionsCounter = reg.createCounter('mcp_auth_cimd_cache_evictions_total', 'CIMD cache evictions');
+      this.sizeGauge = reg.createGauge('mcp_auth_cimd_cache_size', 'Current CIMD cache entry count');
+    } else {
+      this.opsCounter = { inc() {} };
+      this.evictionsCounter = { inc() {} };
+      this.sizeGauge = { set() {} };
+    }
   }
 
   async get(url: string, fetcher: (url: string) => Promise<CimdDocument>): Promise<CimdDocument> {
     const existing = this.cache.get(url);
     if (existing && (Date.now() - existing.timestamp) < this.ttlMs) {
+      this.opsCounter.inc({ result: 'hit' });
       return existing.document;
     }
 
+    this.opsCounter.inc({ result: 'miss' });
     const document = await fetcher(url);
     const pinned = this.pinnedUrls.has(url);
 
@@ -341,6 +359,7 @@ export class CimdCache {
     }
 
     this.cache.set(url, { document, timestamp: Date.now(), pinned });
+    this.sizeGauge.set(this.cache.size);
     return document;
   }
 
@@ -361,12 +380,15 @@ export class CimdCache {
       }
       if (oldestKey) {
         this.cache.delete(oldestKey);
+        this.evictionsCounter.inc();
+        this.sizeGauge.set(this.cache.size);
       }
     }
   }
 
   clear(): void {
     this.cache.clear();
+    this.sizeGauge.set(0);
   }
 
   get size(): number {

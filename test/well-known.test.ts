@@ -48,6 +48,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     cimdMap: {},
     cimdCacheMinutes: 30,
     cimdEnabled: false,
+    metricsEnabled: false,
     shutdownTimeoutSeconds: 30,
     ...overrides,
   };

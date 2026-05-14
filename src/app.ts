@@ -2,10 +2,13 @@ import compression from 'compression';
 import express, { Application, Request, Response, NextFunction } from 'express';
 import { AppConfig } from './config';
 import { createLogger } from './logger';
+import { createMetricsRegistry, IMetricsRegistry } from './metrics';
+import { createHttpMetricsMiddleware, HttpMetrics } from './middleware/metrics';
 import { buildWellKnownDocument, createWellKnownRouter } from './routes/well-known';
 import { createRegisterRouter } from './routes/register';
 import { createAuthorizeRouter, AuthCimdConfig } from './routes/authorize';
 import { createHealthRouter } from './routes/health';
+import { createMetricsRouter } from './routes/metrics';
 import { createTokenRouter } from './routes/token';
 import {
   CimdCache,
@@ -43,12 +46,15 @@ export function buildUpstreamState(
 
 export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions): {
   app: Application;
+  metricsRegistry: IMetricsRegistry;
   updateUpstream: (newUpstreamDoc: Record<string, unknown>) => void;
   setShuttingDown: () => void;
   isShuttingDown: () => boolean;
 } {
   let state = buildUpstreamState(upstreamDoc, config);
   const logger = createLogger(config.debug);
+
+  const metricsRegistry = createMetricsRegistry(config.metricsEnabled);
 
   let shuttingDown = false;
   const setShuttingDown = () => { shuttingDown = true; };
@@ -63,12 +69,31 @@ export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions
 
   app.use(compression());
   app.use(createHealthRouter(isShuttingDown));
+
+  if (config.metricsEnabled) {
+    app.use(createMetricsRouter(metricsRegistry));
+  }
+
   app.use(express.json());
 
-  app.use(createWellKnownRouter(() => state.wellKnownDocument, logger, config.wellKnownRefreshMinutes));
+  let httpMetrics: HttpMetrics | undefined;
+  if (config.metricsEnabled) {
+    httpMetrics = {
+      requestsTotal: metricsRegistry.createCounter('mcp_auth_http_requests_total', 'Total HTTP requests to functional endpoints'),
+      requestDuration: metricsRegistry.createHistogram('mcp_auth_http_request_duration_seconds', 'HTTP request duration in seconds'),
+    };
+  }
+
+  const metricsMiddleware = httpMetrics ? createHttpMetricsMiddleware(httpMetrics) : undefined;
+
+  const wellKnownRouter = createWellKnownRouter(() => state.wellKnownDocument, logger, config.wellKnownRefreshMinutes);
+  if (metricsMiddleware) app.use(metricsMiddleware, wellKnownRouter);
+  else app.use(wellKnownRouter);
 
   if (config.proxyDcrEndpoint) {
-    app.use(createRegisterRouter(config, logger));
+    const registerRouter = createRegisterRouter(config, logger);
+    if (metricsMiddleware) app.use(metricsMiddleware, registerRouter);
+    else app.use(registerRouter);
   }
 
   let cimdConfig: AuthCimdConfig | undefined;
@@ -82,6 +107,7 @@ export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions
     const cimdCache = new CimdCache({
       ttlMinutes: config.cimdCacheMinutes,
       pinnedUrls,
+      metricsRegistry,
     });
 
     const fetcher = cimdFetcher ?? fetchCimdDocument;
@@ -90,23 +116,28 @@ export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions
       validateAndCache: (cimdUrl: string) => cimdCache.get(cimdUrl, fetcher),
     };
 
-    app.use(createTokenRouter(
+    const tokenRouter = createTokenRouter(
       () => state.upstreamTokenEndpoint,
       { map: config.cimdMap, defaultClientId: config.cimdDefaultClientId },
       logger,
-    ));
+      metricsRegistry,
+    );
+    if (metricsMiddleware) app.use(metricsMiddleware, tokenRouter);
+    else app.use(tokenRouter);
   }
 
   if (config.proxyAuthEndpoint) {
     if (!state.upstreamAuthorizationEndpoint) {
       throw new Error('Upstream well-known document is missing authorization_endpoint');
     }
-    app.use(createAuthorizeRouter(
+    const authorizeRouter = createAuthorizeRouter(
       () => state.upstreamAuthorizationEndpoint,
       logger,
       { removed: config.authScopesRemoved, preserved: config.authScopesPreserved },
       cimdConfig,
-    ));
+    );
+    if (metricsMiddleware) app.use(metricsMiddleware, authorizeRouter);
+    else app.use(authorizeRouter);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -124,5 +155,5 @@ export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions
     }
   });
 
-  return { app, updateUpstream, setShuttingDown, isShuttingDown };
+  return { app, metricsRegistry, updateUpstream, setShuttingDown, isShuttingDown };
 }

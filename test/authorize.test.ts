@@ -25,6 +25,7 @@ const CONFIG: AppConfig = {
   cimdMap: {},
   cimdCacheMinutes: 30,
   cimdEnabled: false,
+  metricsEnabled: false,
   shutdownTimeoutSeconds: 30,
 };
 

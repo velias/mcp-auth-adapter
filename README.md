@@ -91,7 +91,8 @@ Environment variables are used. All variables are prefixed with `MCP_`. A `.env`
 | `MCP_PROXY_CIMD_MAP` | No | -- | JSON object mapping CIMD URLs to upstream IdP client_ids. Format: `{"<cimd_url>":"<upstream_client_id>", ...}`. N:1 mapping supported. CIMD auto-enables when this is non-empty or `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID` is set. |
 | `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID` | No | -- | Fallback upstream client_id for CIMD URLs not in the map. If unset, unknown CIMD URLs are rejected with 403 (strict allowlist). |
 | `MCP_PROXY_CIMD_CACHE_MINUTES` | No | `30` | Cache TTL (in minutes) for validated CIMD metadata documents. |
-| | | | **Diagnostics** |
+| | | | **Observability** |
+| `MCP_METRICS_ENABLED` | No | `true` | Enable Prometheus metrics endpoint (`GET /metrics`) and request instrumentation. Set to `false` to disable (zero overhead). |
 | `MCP_DEBUG` | No | `false` | Emit structured debug logs for every request. |
 
 ## Known MCP Client Behaviors
@@ -284,6 +285,49 @@ This means **browser-based MCP clients** (single-page apps that call these endpo
 1. **Reverse proxy** -- configure CORS at the reverse proxy layer (e.g. nginx, Akamai, Cloudflare). Recommended for production deployments that already have a reverse proxy.
 2. **Built-in CORS** (not yet implemented) -- a config option to enable CORS directly in the adapter for simpler deployments, development, and testing. Create feature request please if you need it.
 
+### Access Logging
+
+This adapter does **not** produce HTTP access logs (per-request log lines with method, path, status, latency). Application-level logging covers lifecycle events, errors, and debug detail (when `MCP_DEBUG=true`), and the `/metrics` endpoint provides aggregate request counts and latency histograms -- but individual request traces are not logged.
+
+For per-request access logs, rely on the reverse proxy or load balancer in front of this adapter (e.g. nginx, HAProxy, Envoy, Istio sidecar, or cloud load balancer access logs). This is the standard pattern for microservices and avoids duplicating logging that the infrastructure layer already provides.
+
+### Internal Endpoints
+
+`/health/*` and `/metrics` are unauthenticated operational endpoints intended for cluster-internal use only (Kubernetes probes, Prometheus scrape via ServiceMonitor). They should **not** be exposed to untrusted networks -- keep them behind the cluster-internal Service, not on public Routes/Ingress. A reverse proxy or Ingress should block these paths from external access.
+
+- `/metrics` exposes operational data (request counts, latencies, error rates, upstream health status). No sensitive data (tokens, client_ids, user data) is included -- labels contain only HTTP method, route pattern, and status code. `Cache-Control: no-store` is set.
+- `/health/ready` reveals shutdown state, which could be useful for reconnaissance.
+- `/metrics` returns Prometheus text exposition format, compatible with:
+  - **OpenShift** built-in monitoring (ServiceMonitor)
+  - **Standalone Prometheus**
+  - **OpenTelemetry Collectors** via the [Prometheus receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/prometheusreceiver) -- for OTel-based pipelines, no application-side OTLP push is needed; the OTel Collector scrapes `/metrics` and forwards to any backend.
+
+**Kubernetes annotations** for Prometheus auto-discovery:
+
+```yaml
+metadata:
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3000"
+    prometheus.io/path: "/metrics"
+```
+
+**ServiceMonitor** for OpenShift / Prometheus Operator:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mcp-auth-adapter
+spec:
+  selector:
+    matchLabels:
+      app: mcp-auth-adapter
+  endpoints:
+    - port: http
+      path: /metrics
+```
+
 ### Upstream IdP Compatibility
 
 On first startup (and after every `MCP_UPSTREAM_SSO_URL` change), review the adapter's log output for warnings prefixed with `Upstream IdP compatibility:`. These indicate the upstream IdP may not fully support MCP authorization requirements -- for example, missing `authorization_endpoint`, missing `token_endpoint`, or missing PKCE support (`code_challenge_methods_supported` without `S256`). The adapter injects safe defaults where possible, but these warnings should be investigated to ensure the upstream IdP is correctly configured for MCP flows.
@@ -304,6 +348,56 @@ On `SIGTERM` or `SIGINT` the adapter:
 2. Stops accepting new connections.
 3. Drains in-flight requests until complete (or `MCP_SHUTDOWN_TIMEOUT_SECONDS` elapses, default 30 s, then force-exits).
 4. Clears the periodic well-known refresh timer.
+
+## Logging
+
+The adapter emits structured logs to **stdout** (`info`, `debug`) and **stderr** (`warn`, `error`) in a machine-parseable key=value format:
+
+```
+ts=2025-06-01T12:00:00.000Z level=info msg="MCP Auth Adapter started" port=3000 baseUrl=http://localhost:3000
+```
+
+| Level | Output | When |
+|---|---|---|
+| `info` | stdout | Startup, upstream refresh success, shutdown lifecycle |
+| `warn` | stderr | Upstream fetch failures (fallback kept), config conflicts, IdP compatibility issues |
+| `error` | stderr | Unhandled request errors, upstream request failures, fatal startup errors |
+| `debug` | stdout | Per-request details (method, path, IP, user-agent), discovery fetch attempts — **only when `MCP_DEBUG=true`** |
+
+All levels except `debug` are always active. Set `MCP_DEBUG=true` to enable verbose per-request logging — useful for development and troubleshooting but noisy for production.
+
+No log aggregation agent or format is assumed — the structured key=value lines are compatible with most log collectors (Fluentd, Promtail, Vector, CloudWatch, etc.) and can be parsed with simple regex or key=value splitters.
+
+## Metrics / Observability
+
+The adapter exposes a `GET /metrics` endpoint in [Prometheus text exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/) when `MCP_METRICS_ENABLED=true` (default). Set `MCP_METRICS_ENABLED=false` to disable entirely -- no endpoint, no middleware, no-op instrumentation stubs, zero overhead.
+
+### Exposed metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `mcp_auth_http_requests_total` | counter | `method`, `path`, `status` | Total HTTP requests to functional endpoints |
+| `mcp_auth_http_request_duration_seconds` | histogram | `method`, `path` | Request duration (buckets: 5ms, 10ms, 50ms, 100ms, 500ms, 1s, 5s) |
+| `mcp_auth_upstream_refresh_total` | counter | `result` | Upstream well-known refresh attempts (`success` / `error`) |
+| `mcp_auth_upstream_refresh_duration_seconds` | gauge | -- | Last upstream refresh duration |
+| `mcp_auth_upstream_refresh_last_success_timestamp` | gauge | -- | Unix timestamp of last successful refresh |
+| `mcp_auth_cimd_cache_operations_total` | counter | `result` | CIMD cache lookups (`hit` / `miss`); only when CIMD is enabled |
+| `mcp_auth_cimd_cache_evictions_total` | counter | -- | CIMD cache evictions |
+| `mcp_auth_cimd_cache_size` | gauge | -- | Current CIMD cache entry count |
+| `mcp_auth_token_proxy_upstream_duration_seconds` | histogram | -- | Token proxy upstream request duration; only when CIMD is enabled |
+| `mcp_auth_token_proxy_upstream_status_total` | counter | `status` | Token proxy upstream response status codes |
+| `process_uptime_seconds` | gauge | -- | Process uptime |
+| `process_resident_memory_bytes` | gauge | -- | Resident memory size |
+| `process_heap_used_bytes` | gauge | -- | V8 heap used |
+| `nodejs_eventloop_lag_seconds` | gauge | -- | Event loop lag (mean) |
+
+### Instrumentation scope
+
+Only functional endpoints are instrumented: `/.well-known/*`, `/register`, `/authorize`, `/token`. Health probes (`/health/*`), the `/metrics` endpoint itself, and unmatched paths are **not** tracked -- no noise from operational endpoints or probe traffic.
+
+### Memory footprint
+
+When enabled, the metrics subsystem uses approximately **20--50 KB** of memory. All label values come from a small, fixed set (HTTP method, known route patterns, status codes), so there is no unbounded cardinality growth. When disabled (`MCP_METRICS_ENABLED=false`), the no-op stubs consume effectively zero memory.
 
 ## Development
 

@@ -36,7 +36,9 @@
     "openid-configuration",
     "oauth-authorization-server",
     "dcr",
-    "cimd"
+    "cimd",
+    "prometheus",
+    "metrics"
   ],
   "license": "Apache-2.0",
   "repository": {

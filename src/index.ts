@@ -2,7 +2,8 @@
 import 'dotenv/config';
 import { loadConfig } from './config';
 import { createApp } from './app';
-import { createLogger } from './logger';
+import { createLogger, Logger } from './logger';
+import { IMetricsRegistry } from './metrics';
 import { buildDefaultUpstreamDoc, validateUpstreamDoc } from './routes/well-known';
 import { version } from '../package.json';
 
@@ -15,7 +16,7 @@ const WELL_KNOWN_FETCH_TIMEOUT_MS = 10_000;
 
 async function fetchUpstreamWellKnown(
   issuerUrl: string,
-  log?: ReturnType<typeof createLogger>,
+  log?: Logger,
 ): Promise<Record<string, unknown>> {
   let lastError: Error | undefined;
   for (const path of DISCOVERY_PATHS) {
@@ -39,6 +40,58 @@ async function fetchUpstreamWellKnown(
   throw lastError ?? new Error('All discovery paths failed');
 }
 
+interface InstrumentedRefresh {
+  (): void;
+  /** Retroactively record the initial startup fetch that happened before the registry existed. */
+  recordInitial(success: boolean, durationSec: number): void;
+}
+
+/**
+ * Creates an instrumented periodic refresh callback for the upstream
+ * well-known document. Records success/error counts, duration, and
+ * last-success timestamp via the provided metrics registry.
+ */
+function createInstrumentedRefresh(
+  issuerUrl: string,
+  log: Logger,
+  metricsRegistry: IMetricsRegistry,
+  updateUpstream: (doc: Record<string, unknown>) => void,
+): InstrumentedRefresh {
+  const refreshTotal = metricsRegistry.createCounter('mcp_auth_upstream_refresh_total', 'Upstream well-known refresh attempts');
+  const refreshDuration = metricsRegistry.createGauge('mcp_auth_upstream_refresh_duration_seconds', 'Last upstream refresh duration in seconds');
+  const refreshLastSuccess = metricsRegistry.createGauge('mcp_auth_upstream_refresh_last_success_timestamp', 'Unix timestamp of last successful upstream refresh');
+
+  const refresh: InstrumentedRefresh = (() => {
+    const start = process.hrtime.bigint();
+    void fetchUpstreamWellKnown(issuerUrl, log).then((newDoc) => {
+      const durationSec = Number(process.hrtime.bigint() - start) / 1e9;
+      refreshTotal.inc({ result: 'success' });
+      refreshDuration.set(durationSec);
+      refreshLastSuccess.set(Math.floor(Date.now() / 1000));
+      updateUpstream(newDoc);
+      log.info('Upstream well-known document refreshed');
+      for (const warning of validateUpstreamDoc(newDoc)) {
+        log.warn(warning);
+      }
+    }).catch((err: unknown) => {
+      const durationSec = Number(process.hrtime.bigint() - start) / 1e9;
+      refreshTotal.inc({ result: 'error' });
+      refreshDuration.set(durationSec);
+      log.warn('Failed to refresh upstream well-known, keeping previous', { error: String(err) });
+    });
+  }) as InstrumentedRefresh;
+
+  refresh.recordInitial = (success: boolean, durationSec: number) => {
+    refreshTotal.inc({ result: success ? 'success' : 'error' });
+    refreshDuration.set(durationSec);
+    if (success) {
+      refreshLastSuccess.set(Math.floor(Date.now() / 1000));
+    }
+  };
+
+  return refresh;
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const log = createLogger(config.debug);
@@ -51,9 +104,12 @@ async function main(): Promise<void> {
   }
 
   let upstreamDoc: Record<string, unknown>;
+  let initialFetchOk = false;
+  const fetchStart = process.hrtime.bigint();
   log.info('Fetching upstream well-known', { url: config.upstreamSsoUrl });
   try {
     upstreamDoc = await fetchUpstreamWellKnown(config.upstreamSsoUrl, log);
+    initialFetchOk = true;
     log.info('Upstream well-known document cached');
     for (const warning of validateUpstreamDoc(upstreamDoc)) {
       log.warn(warning);
@@ -62,21 +118,14 @@ async function main(): Promise<void> {
     log.warn('Failed to fetch upstream well-known, using defaults', { error: String(err) });
     upstreamDoc = buildDefaultUpstreamDoc(config.upstreamSsoUrl);
   }
+  const initialFetchDuration = Number(process.hrtime.bigint() - fetchStart) / 1e9;
 
-  const { app, updateUpstream, setShuttingDown } = createApp({ config, upstreamDoc });
+  const { app, metricsRegistry, updateUpstream, setShuttingDown } = createApp({ config, upstreamDoc });
 
+  const doRefresh = createInstrumentedRefresh(config.upstreamSsoUrl, log, metricsRegistry, updateUpstream);
+  doRefresh.recordInitial(initialFetchOk, initialFetchDuration);
   const refreshMs = config.wellKnownRefreshMinutes * 60 * 1000;
-  const refreshTimer = setInterval(() => {
-    void fetchUpstreamWellKnown(config.upstreamSsoUrl, log).then((newDoc) => {
-      updateUpstream(newDoc);
-      log.info('Upstream well-known document refreshed');
-      for (const warning of validateUpstreamDoc(newDoc)) {
-        log.warn(warning);
-      }
-    }).catch((err: unknown) => {
-      log.warn('Failed to refresh upstream well-known, keeping previous', { error: String(err) });
-    });
-  }, refreshMs);
+  const refreshTimer = setInterval(doRefresh, refreshMs);
 
   const server = app.listen(config.port, () => {
     log.info('MCP Auth Adapter started', {
@@ -86,6 +135,7 @@ async function main(): Promise<void> {
       authProxy: config.proxyAuthEndpoint ? 'enabled' : 'disabled',
       dcrProxy: config.proxyDcrEndpoint ? 'enabled' : 'disabled',
       cimdProxy: config.cimdEnabled ? 'enabled (EXPERIMENTAL)' : 'disabled',
+      metrics: config.metricsEnabled ? 'enabled' : 'disabled',
       refreshMinutes: config.wellKnownRefreshMinutes,
       debug: config.debug,
     });

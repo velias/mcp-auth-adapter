@@ -14,6 +14,7 @@ export interface AppConfig {
   cimdDefaultClientId?: string;
   cimdCacheMinutes: number;
   cimdEnabled: boolean;
+  metricsEnabled: boolean;
   shutdownTimeoutSeconds: number;
 }
 
@@ -130,6 +131,7 @@ export function loadConfig(): AppConfig {
     cimdDefaultClientId,
     cimdCacheMinutes,
     cimdEnabled,
+    metricsEnabled: parseBoolEnv('MCP_METRICS_ENABLED', true),
     shutdownTimeoutSeconds: parseIntEnv('MCP_SHUTDOWN_TIMEOUT_SECONDS', 30),
   };
 }
