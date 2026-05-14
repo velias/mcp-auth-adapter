@@ -29,6 +29,20 @@ Thank you for considering contributing! This document explains the process and g
    ```
 5. Open a PR against `main` and reference the issue (e.g. `Fixes #42` or `Relates to #42`).
 
+### PR titles and labels (for release notes)
+
+GitHub Release notes are **auto-generated from merged PRs**. To keep them useful:
+
+- **Write a clear PR title** — it appears verbatim in the release notes (along with the PR author). The PR body/description is _not_ included.
+- **Apply a label** to categorize the PR in release notes. Use one of:
+  - `breaking` — breaking changes
+  - `enhancement` or `feature` — new functionality
+  - `bug` or `fix` — bug fixes
+  - `documentation` — docs-only changes
+  - Unlabeled PRs land in "Other Changes"
+- Labels can be added or changed **at any time** before the release is created — they don't need to be set at merge time.
+- All meaningful changes should go through PRs. Direct commits to `main` appear as raw commit hashes in release notes.
+
 ## Development Setup
 
 ```bash
@@ -76,6 +90,10 @@ ESLint uses [typescript-eslint](https://typescript-eslint.io/) with type-aware r
 - Every new feature or bug fix should include tests.
 - Tests must not make real network calls or start a listening server.
 - Each route module has a corresponding test file in `test/`.
+
+## Releases
+
+See [RELEASING.md](RELEASING.md) for the release process, npm token setup, and how release notes are generated.
 
 ## License
 

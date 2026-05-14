@@ -15,7 +15,8 @@
     "dev": "ts-node src/index.ts",
     "test": "jest",
     "lint": "eslint src/ test/",
-    "lint:fix": "eslint src/ test/ --fix"
+    "lint:fix": "eslint src/ test/ --fix",
+    "prepublishOnly": "npm run lint && npm test && npm run build"
   },
   "license": "Apache-2.0",
   "repository": {

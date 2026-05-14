@@ -3,3 +3,5 @@ dist/
 coverage/
 *.js.map
 .env
+
+.cursor/plans/
