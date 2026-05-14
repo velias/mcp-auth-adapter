@@ -18,7 +18,7 @@ export async function readResponseWithLimit(
     for (;;) {
       const result = await reader.read();
       if (result.done) break;
-      const chunk = result.value as Uint8Array;
+      const chunk = result.value;
       totalBytes += chunk.byteLength;
       if (totalBytes > maxBytes) {
         reader.cancel().catch(() => {});
