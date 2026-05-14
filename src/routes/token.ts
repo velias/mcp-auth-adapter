@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import express from 'express';
 import { Logger, requestMeta } from '../logger';
-import { isCimdClientId, resolveUpstreamClientId, sanitizeForError } from '../cimd';
+import { isCimdClientId, validateCimdUrl, resolveUpstreamClientId, sanitizeForError } from '../cimd';
 
 const TOKEN_UPSTREAM_TIMEOUT_MS = 10000;
 const TOKEN_UPSTREAM_MAX_RESPONSE_BYTES = 64 * 1024;
@@ -63,6 +63,15 @@ async function handleTokenRequest(
     }
 
     if (clientId && isCimdClientId(clientId)) {
+      const urlValidation = validateCimdUrl(clientId);
+      if (!urlValidation.valid) {
+        res.status(400).json({
+          error: 'invalid_client',
+          error_description: `Invalid CIMD client_id URL: ${sanitizeForError(urlValidation.reason)}`,
+        });
+        return;
+      }
+
       const upstreamClientId = resolveUpstreamClientId(
         clientId,
         cimdResolver.map,

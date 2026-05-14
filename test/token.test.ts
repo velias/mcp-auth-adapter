@@ -246,4 +246,123 @@ describe('POST /token (Token Proxy)', () => {
     expect(res.status).toBe(502);
     expect(res.body.error).toBe('server_error');
   });
+
+  describe('CIMD URL validation', () => {
+    it('rejects CIMD client_id with fragment', async () => {
+      const app = createTestApp();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'https://cursor.com/oauth-client.json#frag',
+          code: 'code-123',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_client');
+      expect(res.body.error_description).toMatch(/fragment/);
+    });
+
+    it('rejects CIMD client_id with dot segments', async () => {
+      const app = createTestApp();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'https://cursor.com/../etc/passwd',
+          code: 'code-123',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_client');
+      expect(res.body.error_description).toMatch(/dot/i);
+    });
+
+    it('rejects CIMD client_id with no path beyond /', async () => {
+      const app = createTestApp();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'https://cursor.com/',
+          code: 'code-123',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_client');
+      expect(res.body.error_description).toMatch(/path/);
+    });
+
+    it('rejects CIMD client_id with query string', async () => {
+      const app = createTestApp();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'https://cursor.com/oauth-client.json?foo=bar',
+          code: 'code-123',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_client');
+      expect(res.body.error_description).toMatch(/query/);
+    });
+
+    it('rejects CIMD client_id with userinfo', async () => {
+      const app = createTestApp();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'https://user:pass@cursor.com/oauth-client.json',
+          code: 'code-123',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_client');
+      expect(res.body.error_description).toMatch(/username|password/);
+    });
+
+    it('does not validate non-CIMD client_id as URL', async () => {
+      mockUpstreamTokenResponse();
+      const app = createTestApp();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'plain-client-id',
+          code: 'code-123',
+        });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('does not call upstream when CIMD URL validation fails', async () => {
+      (globalThis.fetch as jest.Mock) = jest.fn();
+      const app = createTestApp();
+
+      await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'https://cursor.com/#frag',
+          code: 'code-123',
+        });
+
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+  });
 });

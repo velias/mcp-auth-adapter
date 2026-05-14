@@ -1,19 +1,21 @@
 # MCP Auth Adapter
 
-> ***Make your corporate IdP MCP-ready, now!***
+<p align="center">
+  <img src="docs/banner.svg" alt="Make your corporate IdP MCP-ready, now!" width="720"/>
+</p>
 
 [![CI](https://github.com/velias/mcp-auth-adapter/actions/workflows/ci.yml/badge.svg)](https://github.com/velias/mcp-auth-adapter/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/velias/f550f0ffe68a574a690032088359fef3/raw/mcp-auth-adapter-coverage.json)](https://github.com/velias/mcp-auth-adapter/actions/workflows/ci.yml)
 
 An OAuth/OIDC authentication adapter for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) clients. It sits in front of any OAuth 2.0 / OIDC upstream IdP that serves standard discovery metadata -- such as Keycloak, Auth0, Okta, Azure AD (Entra ID), Google Identity, or any provider serving standard OAuth 2.0 / OIDC discovery metadata -- and provides functionality required by the [MCP Authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) for the most common MCP clients (Claude Code/Desktop, Cursor IDE, ChatGPT, Gemini CLI, VS Code, ...) and [their known problematic behaviours](#known-mcp-client-behaviors).
 
-MCP servers announce this adapter as their authorization server. MCP clients discover it via `.well-known` and interact with its endpoints. **Authentication itself, token issuing, and token exchanges are all performed by the upstream IdP** -- this adapter is a thin, transparent, stateless facade.
+MCP servers [announce this adapter as their authorization server](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#authorization-server-discovery). MCP clients discover it via `.well-known` and interact with its endpoints. **Authentication itself, token issuing, and token exchanges are all performed by the upstream IdP** -- this adapter is only a very thin, transparent, stateless facade.
 
 ### Features
 
-- **Well-known discovery** (`/.well-known/openid-configuration`, `/.well-known/oauth-authorization-server`) -- filtered, MCP-focused view of the upstream OIDC metadata with injected adapter endpoints and configurable scopes.
-- **Open Dynamic Client Registration** (`POST /register`, optional) -- returns a pre-configured fixed `client_id` for all registering MCP clients per [RFC 7591](https://rfc-editor.org/rfc/rfc7591). Auto-enables when `MCP_PROXY_DCR_CLIENT_ID` is set.
-- **Authorization proxy** (`GET /authorize`, optional) -- intercepts authorization requests, applies configurable scope filtering, and redirects to the upstream IdP. Auto-enables when scope filtering or CIMD is configured.
+- **Well-known discovery** (`/.well-known/openid-configuration`, `/.well-known/oauth-authorization-server`) -- filtered, MCP-focused view of the upstream IdP metadata with injected adapter endpoints and tailored configurations.
+- **Open Dynamic Client Registration** (`POST /register`, optional) -- returns a pre-configured fixed `client_id` for all registering MCP clients per [RFC 7591](https://rfc-editor.org/rfc/rfc7591).
+- **Authorization proxy** (`GET /authorize`, optional) -- intercepts authorization requests, applies configurable scope filtering and/or CIMD `client_id` substitution, and redirects to the upstream IdP.
 - **CIMD adapter** (`GET /authorize` + `POST /token`, EXPERIMENTAL, optional) -- accepts [Client ID Metadata Document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) style `client_id` URLs, validates metadata documents, and maps them to pre-configured fixed upstream IdP client_ids. See [CIMD Adapter](#cimd-adapter-experimental).
 
 ## Prerequisites
@@ -36,7 +38,7 @@ npm run dev     # development (ts-node)
 
 ## Configuration
 
-All variables are prefixed with `MCP_`. A `.env` file in the project root is loaded automatically via [dotenv](https://github.com/motdotla/dotenv); explicit environment variables take precedence.
+Environment variables are used. All variables are prefixed with `MCP_`. A `.env` file in the project root is loaded automatically, explicit environment variables take precedence.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -61,7 +63,7 @@ All variables are prefixed with `MCP_`. A `.env` file in the project root is loa
 
 ## Known MCP Client Behaviors
 
-MCP clients interact with OAuth/OIDC in ways that can cause issues with upstream IdPs not specifically designed for MCP. This adapter's scope configuration addresses the most common known problems.
+MCP clients interact with OAuth/OIDC in ways that can cause issues with upstream IdPs not specifically designed for MCP. This adapter addresses the most common known problems.
 
 ### Clients request all announced scopes
 
@@ -90,7 +92,7 @@ MCP_PROXY_AUTH_SCOPES_PRESERVED=openid,api.read,api.write
 
 This catches scopes regardless of whether the client added them from the discovery document or hardcoded them.
 
-### Clients always request `offline_access`
+### Clients always request `offline_access` scope
 
 Some MCP clients (e.g. Claude Code, Cursor IDE) unconditionally add `offline_access` to every authorization request to be sure they obtain refresh tokens, as some IdPs provide it only under this scope. This may be problematic when this scope has different consequence in your IdP:
 
@@ -126,14 +128,19 @@ MCP_PROXY_AUTH_SCOPES_REMOVED=offline_access
 
 `MCP_WELL_KNOWN_SCOPES_SUPPORTED` controls the **demand side** (what clients see and request), while `MCP_PROXY_AUTH_SCOPES_REMOVED` / `MCP_PROXY_AUTH_SCOPES_PRESERVED` controls the **supply side** (what actually reaches the upstream IdP). Using both provides defense in depth.
 
-## Open DCR Security Limitations
+## Open DCR and its Security Limitations
 
-The Open DCR endpoint returns a fixed public `client_id` (`token_endpoint_auth_method: none`). Any local application can obtain this `client_id` and start an OAuth flow. Two emerging standards address this:
+MCP Clients need a way to get `client_id` necessary to login through the upstream IdP. 
+You can use Open DCR functionality of this adapter if your IdP does not provide it, or if you do not want to use it.
+
+The Open DCR endpoint returns a fixed public `client_id` (`token_endpoint_auth_method: none`) to be used by MCP Clients. 
+But as many MCP Clients are local apps, any local application can obtain this `client_id` and start an OAuth flow. 
+IdP do not know who is asking for the `client_id`. Two emerging standards address this:
 
 - **DCR with Software Statement Assertion (SSA)** -- cryptographically proves client identity via signed JWTs ([RFC 7591 §2.3](https://rfc-editor.org/rfc/rfc7591#section-2.3)). No major MCP client currently includes Software Statements in DCR requests.
 - **Client ID Metadata Documents (CIMD)** -- the `client_id` is an HTTPS URL pointing to a metadata document. Default mechanism in the [MCP Auth Spec (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#client-id-metadata-documents), not yet universally adopted. **This adapter includes experimental CIMD support** -- see [CIMD Adapter](#cimd-adapter-experimental).
 
-Until "DCR with SSA" or CIMD is widely used, user consent at the upstream IdP is the last line of defense. This is an [accepted limitation of the MCP auth ecosystem](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#localhost-redirect-uri-risks).
+Until "DCR with SSA" or CIMD is widely supported, user consent during login at the upstream IdP is the last line of defense. This is an [accepted limitation of the MCP auth ecosystem](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#localhost-redirect-uri-risks).
 
 ## CIMD Adapter (EXPERIMENTAL)
 
@@ -142,7 +149,7 @@ Until "DCR with SSA" or CIMD is widely used, user consent at the upstream IdP is
 When configured, the adapter bridges MCP clients using CIMD-style `client_id` (HTTPS URLs) to upstream IdPs that don't support CIMD natively:
 
 1. Validates CIMD URL syntax per the spec (Section 3)
-2. Checks if the client is allowed (map lookup + optional default) -- rejects unknown clients before any I/O
+2. Checks if the client is allowed in the configuration (map lookup + optional default) -- rejects unknown clients before any I/O
 3. Fetches and validates the CIMD metadata document (with SSRF protections and caching)
 4. Validates `redirect_uri` against the document's `redirect_uris` (exact match per RFC 9700)
 5. Substitutes the CIMD `client_id` with a pre-registered upstream IdP client_id
@@ -165,37 +172,27 @@ MCP_PROXY_CIMD_DEFAULT_CLIENT_ID=generic-mcp-client
 
 ### CIMD Security Considerations
 
+- **Token `azp` mismatch**: Issued tokens contain the **upstream** client_id in the `azp` claim, not the CIMD URL the MCP client sent. This works only if MCP client validates `azp` against its own `client_id`. If a future client does, tokens would appear invalid -- an inherent limitation of client_id substitution that requires native IdP CIMD support to resolve.
 - **SSRF protection**: DNS resolution checks (rejects private/loopback/link-local IPs including IPv6-mapped IPv4), no redirect following, 5KB response size limit, 5-second timeout.
 - **DNS rebinding caveat**: A TOCTOU gap exists between the DNS check and the actual fetch connection. The cache mitigates this by limiting repeated fetches.
 - **Cache isolation**: Configured (mapped) clients are pinned in cache and cannot be evicted by an attacker flooding unknown CIMD URLs. Unpinned cache is capped at 1000 entries.
 - **Allowlist-first**: When `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID` is not set, only mapped CIMD URLs are allowed; unknown URLs are rejected without any outbound fetch.
 - **Token proxy**: Relays token requests to the upstream IdP with `client_id` substitution, body size limits, timeouts, response size limits, and header whitelisting.
-- **Token `azp` mismatch**: Issued tokens contain the **upstream** client_id in the `azp` claim, not the CIMD URL the MCP client sent. The `aud` claim is not affected (it contains the resource server per the OAuth spec). This works today because no major MCP client validates `azp` against its own `client_id`. If a future client does, tokens would appear invalid -- an inherent limitation of client_id substitution that requires native IdP CIMD support to resolve.
 
 ## Token Issuer Validation
 
 This adapter rewrites `issuer` in well-known metadata to its own `MCP_BASE_URL` (RFC 8414 §3.3), but tokens are issued by the **upstream IdP** -- their `iss` claim contains the upstream IdP URL.
 
-**MCP servers must not validate the JWT `iss` claim against this adapter's discovery `issuer`.**
+**MCP servers and clients must not validate the access token JWT `iss` claim against this adapter's discovery `issuer`.**
 
 Two correct approaches:
 
 1. **Skip `iss` validation (recommended)** -- JWKS signature verification is sufficient. A valid signature against the adapter's `jwks_uri` (which points to the upstream IdP's JWKS) cryptographically proves the token's origin.
 2. **Validate `iss` against the upstream IdP URL** -- configure the MCP server with `MCP_UPSTREAM_SSO_URL`, not `MCP_BASE_URL`.
 
-This separation exists because the adapter is an authorization metadata facade, not a token issuer. It controls discovery, client registration, and authorization redirects, but all token operations remain at the upstream IdP.
+This separation exists because the adapter is an lightweight authorization metadata facade, not a token issuer. It controls discovery, client registration, and authorization redirects, but all token operations remain at the upstream IdP.
 
-## Upstream Well-Known Handling
-
-The adapter fetches the upstream IdP's discovery document at startup (trying OIDC and RFC 8414 paths) but only exposes a strict whitelist of fields relevant to MCP. See [Well-Known Field Filtering](#well-known-field-filtering) for details.
-
-- **Discovery fallback chain**: The adapter tries `/.well-known/openid-configuration` first, then `/.well-known/oauth-authorization-server` (RFC 8414). If both fail, endpoints are derived from `MCP_UPSTREAM_SSO_URL` using Keycloak URL conventions (e.g. `{issuer}/protocol/openid-connect/auth`). **This last-resort fallback is Keycloak-specific** -- for other IdPs the derived URLs will be incorrect. Capability fields default to safe minimums (e.g. `code_challenge_methods_supported: ["S256"]`).
-- **Flow-level defaults**: When the upstream provides `authorization_endpoint` and `token_endpoint` but omits flow fields, the adapter injects: `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code"]`, `code_challenge_methods_supported: ["S256"]`. Existing upstream values are never overridden.
-- **Periodic refresh**: Re-fetches at the configured interval (default: 60 min). On success, the new document is used immediately. On failure, the previous document is kept.
-- **Compatibility validation**: At startup and on each periodic refresh, the adapter validates the upstream document and logs `Upstream IdP compatibility:` warnings for:
-  - Missing `authorization_endpoint` or `token_endpoint` (MCP authorization flow will not work).
-  - Missing `code_challenge_methods_supported` (the adapter will advertise `["S256"]` but if the upstream doesn't actually support PKCE, token exchange will fail).
-  - `code_challenge_methods_supported` present but without `S256` (MCP requires PKCE with S256).
+All the major MCP clients we tested today are OK.
 
 ## Deployment Notes
 
@@ -209,9 +206,9 @@ Every `client_id` used by this adapter (both the DCR client and each CIMD-mapped
 | Consent | **Enabled (required)** | User consent is the primary security control -- it lets users see which application is requesting access and decide whether to grant it |
 | Standard flow | Enabled | Authorization code flow is the only flow used by MCP clients |
 | Valid redirect URIs | See below | Must cover all MCP clients that will use this `client_id` |
-| Allowed scopes | | Must cover all the scopes required by MCP servers using this MCP authentication adapter |
+| Allowed scopes | | Must cover all the scopes required by MCP servers using this MCP authentication adapter, mainly the one requiring pre-approval |
 
-**Redirect URI patterns** to cover the most common MCP clients:
+**Redirect URI patterns** to cover the most common MCP clients -- non-authoritative hints, please verify at the deployment time:
 
 | Pattern | MCP Clients |
 |---|---|
@@ -226,6 +223,8 @@ Every `client_id` used by this adapter (both the DCR client and each CIMD-mapped
 | `https://vscode.dev/*` | VS Code (web) |
 | `warp://mcp/*` | Warp |
 | `vscode://saoudrizwan.claude-dev/*` | Cline |
+
+Note: ephemeral ports are typically used on localhost/127.0.0.1, so your IdP has to allow any port here. And any possible path also.
 
 For the **DCR client** (`MCP_PROXY_DCR_CLIENT_ID`), configure all patterns above to support all MCP clients with a single shared client.
 
@@ -260,7 +259,19 @@ Both are mounted before body-parsing middleware. Neither checks upstream IdP ava
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, linting, and code style guidelines.
 
-## Well-Known Field Filtering
+## Upstream Well-Known Handling
+
+The adapter fetches the upstream IdP's discovery document at startup (trying OIDC and RFC 8414 paths) but only exposes a strict whitelist of fields relevant to MCP. See [Well-Known Field Filtering](#well-known-field-filtering) for details.
+
+- **Discovery fallback chain**: The adapter tries `/.well-known/openid-configuration` first, then `/.well-known/oauth-authorization-server` (RFC 8414). If both fail, endpoints are derived from `MCP_UPSTREAM_SSO_URL` using Keycloak URL conventions (e.g. `{issuer}/protocol/openid-connect/auth`). **This last-resort fallback is Keycloak-specific** -- for other IdPs the derived URLs will be incorrect. Capability fields default to safe minimums (e.g. `code_challenge_methods_supported: ["S256"]`).
+- **Flow-level defaults**: When the upstream provides `authorization_endpoint` and `token_endpoint` but omits flow fields, the adapter injects: `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code"]`, `code_challenge_methods_supported: ["S256"]`. Existing upstream values are never overridden.
+- **Periodic refresh**: Re-fetches at the configured interval (default: 60 min). On success, the new document is used immediately. On failure, the previous document is kept.
+- **Compatibility validation**: At startup and on each periodic refresh, the adapter validates the upstream document and logs `Upstream IdP compatibility:` warnings for:
+  - Missing `authorization_endpoint` or `token_endpoint` (MCP authorization flow will not work).
+  - Missing `code_challenge_methods_supported` (the adapter will advertise `["S256"]` but if the upstream doesn't actually support PKCE, token exchange will fail).
+  - `code_challenge_methods_supported` present but without `S256` (MCP requires PKCE with S256).
+
+### Well-Known Field Filtering
 
 The adapter only exposes a strict whitelist of upstream fields. New upstream fields are **not** automatically included -- they must be added to `UPSTREAM_WHITELIST_FIELDS` in [`src/routes/well-known.ts`](src/routes/well-known.ts).
 
