@@ -25,12 +25,15 @@ function requireEnv(name: string): string {
   return value;
 }
 
-function parseIntEnv(name: string, fallback: number): number {
+function parseIntEnv(name: string, fallback: number, min = 0): number {
   const raw = process.env[name];
   if (!raw) return fallback;
-  const parsed = Number(raw);
-  if (Number.isNaN(parsed)) {
-    throw new Error(`Environment variable ${name} must be a valid number, got: "${raw}"`);
+  const parsed = parseInt(raw, 10);
+  if (Number.isNaN(parsed) || String(parsed) !== raw.trim()) {
+    throw new Error(`Environment variable ${name} must be a valid integer, got: "${raw}"`);
+  }
+  if (parsed < min) {
+    throw new Error(`Environment variable ${name} must be >= ${min}, got: ${parsed}`);
   }
   return parsed;
 }
@@ -113,7 +116,7 @@ export function loadConfig(): AppConfig {
 
   return {
     baseUrl: requireEnv('MCP_BASE_URL'),
-    port: parseIntEnv('MCP_PORT', 3000),
+    port: parseIntEnv('MCP_PORT', 3000, 1),
     upstreamSsoUrl: requireEnv('MCP_UPSTREAM_SSO_URL'),
     clientId: clientId ?? '',
     scopesSupported: parseScopesEnv('MCP_WELL_KNOWN_SCOPES_SUPPORTED'),
