@@ -19,12 +19,44 @@ MCP servers [announce this adapter as their authorization server](https://modelc
 - **Authorization proxy** (`GET /authorize`, optional) -- intercepts authorization requests, applies configurable scope filtering and/or CIMD `client_id` substitution, and redirects to the upstream IdP.
 - **CIMD adapter** (`GET /authorize` + `POST /token`, EXPERIMENTAL, optional) -- accepts [Client ID Metadata Document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) style `client_id` URLs, validates metadata documents, and maps them to pre-configured fixed upstream IdP client_ids. See [CIMD Adapter](#cimd-adapter-experimental).
 
-## Prerequisites
+## Container Image
 
-- Node.js >= 18.x (uses native `fetch`)
-- npm
+Pre-built container images are published to GitHub Container Registry on every release. This is the recommended way to deploy in production -- no Node.js installation required.
 
-## Build and Run
+**Prerequisites:** [Docker](https://docs.docker.com/get-docker/) or [Podman](https://podman.io/docs/installation)
+
+### Pull and run
+
+Podman is used in examples, but you can use `docker` command instead:
+
+```bash
+podman run -d --name mcp-auth-adapter \
+  -p 3000:3000 \
+  -e MCP_BASE_URL=https://mcp-auth.example.com \
+  -e MCP_UPSTREAM_SSO_URL=https://sso.example.com/auth/realms/external \
+  -e MCP_PROXY_DCR_CLIENT_ID=mcp-client \
+  ghcr.io/velias/mcp-auth-adapter:latest
+```
+
+Or use an env file for all configuration (see [Configuration](#configuration) below):
+
+```bash
+podman run -d -p 3000:3000 --env-file .env ghcr.io/velias/mcp-auth-adapter:latest
+```
+
+### Available tags
+
+Each release `vX.Y.Z` produces the following image tags:
+- `X.Y.Z` -- exact version (recommended for production)
+- `X.Y` -- latest patch within a minor version
+- `X` -- latest minor within a major version
+- `latest` -- most recent release
+
+To build the image locally from source, see [CONTRIBUTING.md](CONTRIBUTING.md#running-with-docker--podman).
+
+## Build from Source
+
+**Prerequisites:** Node.js >= 18.x (uses native `fetch`), npm
 
 ```bash
 npm install
@@ -33,8 +65,7 @@ npm run build
 # Create .env from the template and edit it
 cp .env.example .env
 
-npm start       # production
-npm run dev     # development (ts-node)
+npm start
 ```
 
 ## Configuration

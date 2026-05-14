@@ -39,6 +39,8 @@ add context, highlight important changes, or remove noise.
    - Run lint, test, build
    - Publish to npm with provenance
    - Create a GitHub Release with auto-generated notes
+   - Build and push a container image to `ghcr.io/velias/mcp-auth-adapter`
+     with tags `X.Y.Z`, `X.Y`, `X`, and `latest`
 6. (Optional) Edit the GitHub Release notes in the UI to curate
 
 ## Version guidance

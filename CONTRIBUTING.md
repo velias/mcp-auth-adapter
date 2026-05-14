@@ -45,6 +45,8 @@ GitHub Release notes are **auto-generated from merged PRs**. To keep them useful
 
 ## Development Setup
 
+**Prerequisites:** Node.js >= 18.x, npm (or [Docker](https://docs.docker.com/get-docker/) / [Podman](https://podman.io/docs/installation) for container-based development)
+
 ```bash
 git clone https://github.com/velias/mcp-auth-adapter.git
 cd mcp-auth-adapter
@@ -56,6 +58,18 @@ npm install
 ```bash
 cp .env.example .env    # Edit .env with your upstream IdP details
 npm run dev             # Start with ts-node
+```
+
+### Running with Docker / Podman
+
+```bash
+docker build -t mcp-auth-adapter .
+docker run -p 3000:3000 --env-file .env mcp-auth-adapter
+```
+
+```bash
+podman build -t mcp-auth-adapter .
+podman run -p 3000:3000 --env-file .env mcp-auth-adapter
 ```
 
 ### Running Tests

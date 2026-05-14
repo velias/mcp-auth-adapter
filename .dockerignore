@@ -1,0 +1,13 @@
+node_modules
+dist
+coverage
+.env
+.env.example
+.git
+.github
+.cursor
+test
+docs
+*.md
+eslint.config.mjs
+jest.config.js
