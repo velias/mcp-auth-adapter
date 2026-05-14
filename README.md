@@ -75,8 +75,8 @@ Environment variables are used. All variables are prefixed with `MCP_`. A `.env`
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | | | | **Core** |
-| `MCP_BASE_URL` | Yes | -- | Public base URL of this adapter (**no trailing slash**). Used as `issuer` (RFC 8414 §3.3) and to construct endpoint URLs. Must exactly match what MCP servers advertise in their Protected Resource Metadata `authorization_servers` array. |
-| `MCP_UPSTREAM_SSO_URL` | Yes | -- | Base URL (issuer) of the upstream IdP. Works with any OAuth 2.0 / OIDC provider. Discovery is attempted via `/.well-known/openid-configuration`, then `/.well-known/oauth-authorization-server` (RFC 8414); on failure, fallback endpoints are derived using Keycloak URL conventions ([see below](#upstream-well-known-handling)). |
+| `MCP_BASE_URL` | Yes | -- | Public base URL of this adapter. Used as `issuer` (RFC 8414 §3.3) and to construct endpoint URLs. Must be `http` or `https`; trailing slashes are stripped automatically. Must exactly match what MCP servers advertise in their Protected Resource Metadata `authorization_servers` array. |
+| `MCP_UPSTREAM_SSO_URL` | Yes | -- | Base URL (issuer) of the upstream IdP. Must be `http` or `https`; trailing slashes are stripped automatically. Works with any OAuth 2.0 / OIDC provider. Discovery is attempted via `/.well-known/openid-configuration`, then `/.well-known/oauth-authorization-server` (RFC 8414); on failure, fallback endpoints are derived using Keycloak URL conventions ([see below](#upstream-well-known-handling)). |
 | `MCP_PORT` | No | `3000` | Port this app listens on. |
 | `MCP_SHUTDOWN_TIMEOUT_SECONDS` | No | `30` | Maximum seconds to wait for in-flight requests to drain after `SIGTERM`/`SIGINT` before force-exiting. |
 | | | | **Dynamic Client Registration** |

@@ -61,6 +61,59 @@ describe('loadConfig — required env vars', () => {
 });
 
 // ---------------------------------------------------------------------------
+// URL validation
+// ---------------------------------------------------------------------------
+describe('loadConfig — URL validation', () => {
+  it('rejects malformed MCP_BASE_URL', () => {
+    withEnv({ MCP_BASE_URL: 'not-a-url' }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_BASE_URL.*not a valid URL/);
+    });
+  });
+
+  it('rejects non-http/https scheme for MCP_BASE_URL', () => {
+    withEnv({ MCP_BASE_URL: 'ftp://files.example.com' }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_BASE_URL.*http or https/);
+    });
+  });
+
+  it('rejects malformed MCP_UPSTREAM_SSO_URL', () => {
+    withEnv({ MCP_UPSTREAM_SSO_URL: '://broken' }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_UPSTREAM_SSO_URL.*not a valid URL/);
+    });
+  });
+
+  it('rejects non-http/https scheme for MCP_UPSTREAM_SSO_URL', () => {
+    withEnv({ MCP_UPSTREAM_SSO_URL: 'file:///etc/passwd' }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_UPSTREAM_SSO_URL.*http or https/);
+    });
+  });
+
+  it('strips trailing slashes from MCP_BASE_URL', () => {
+    withEnv({ MCP_BASE_URL: 'http://localhost:3000///' }, () => {
+      expect(loadConfig().baseUrl).toBe('http://localhost:3000');
+    });
+  });
+
+  it('strips trailing slash from MCP_UPSTREAM_SSO_URL', () => {
+    withEnv({ MCP_UPSTREAM_SSO_URL: 'https://sso.example.com/auth/realms/test/' }, () => {
+      expect(loadConfig().upstreamSsoUrl).toBe('https://sso.example.com/auth/realms/test');
+    });
+  });
+
+  it('accepts valid http URL', () => {
+    withEnv({ MCP_BASE_URL: 'http://localhost:3000' }, () => {
+      expect(loadConfig().baseUrl).toBe('http://localhost:3000');
+    });
+  });
+
+  it('accepts valid https URL', () => {
+    withEnv({ MCP_UPSTREAM_SSO_URL: 'https://sso.example.com/realm' }, () => {
+      expect(loadConfig().upstreamSsoUrl).toBe('https://sso.example.com/realm');
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // parseIntEnv — port, refresh, etc.
 // ---------------------------------------------------------------------------
 describe('loadConfig — integer env vars', () => {

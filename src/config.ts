@@ -39,6 +39,22 @@ function parseIntEnv(name: string, fallback: number, min = 0): number {
   return parsed;
 }
 
+function requireUrlEnv(name: string): string {
+  const raw = requireEnv(name);
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`Environment variable ${name} is not a valid URL: "${raw}"`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `Environment variable ${name} must use http or https scheme, got: "${parsed.protocol}"`,
+    );
+  }
+  return raw.replace(/\/+$/, '');
+}
+
 function parseBoolEnv(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -116,9 +132,9 @@ export function loadConfig(): AppConfig {
     || authScopesPreserved !== undefined;
 
   return {
-    baseUrl: requireEnv('MCP_BASE_URL'),
+    baseUrl: requireUrlEnv('MCP_BASE_URL'),
     port: parseIntEnv('MCP_PORT', 3000, 1),
-    upstreamSsoUrl: requireEnv('MCP_UPSTREAM_SSO_URL'),
+    upstreamSsoUrl: requireUrlEnv('MCP_UPSTREAM_SSO_URL'),
     clientId: clientId ?? '',
     scopesSupported: parseScopesEnv('MCP_WELL_KNOWN_SCOPES_SUPPORTED'),
     authScopesRemoved,
