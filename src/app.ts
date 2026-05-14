@@ -1,5 +1,5 @@
 import compression from 'compression';
-import express, { Application } from 'express';
+import express, { Application, Request, Response, NextFunction } from 'express';
 import { AppConfig } from './config';
 import { createLogger } from './logger';
 import { buildWellKnownDocument, createWellKnownRouter } from './routes/well-known';
@@ -104,6 +104,21 @@ export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions
       cimdConfig,
     ));
   }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    logger.error('unhandled error', {
+      method: req.method,
+      path: req.path,
+      error: String(err),
+    });
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'server_error',
+        error_description: 'An unexpected error occurred',
+      });
+    }
+  });
 
   return { app, updateUpstream, setShuttingDown, isShuttingDown };
 }

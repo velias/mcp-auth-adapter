@@ -462,3 +462,40 @@ describe('GET /authorize (CIMD integration)', () => {
     expect(res.body.error_description).not.toContain('sso.example.com');
   });
 });
+
+describe('Global JSON error handler', () => {
+  it('returns RFC-style JSON 500 on unhandled route errors', async () => {
+    const poisoned = { toString() { throw new Error('Simulated internal failure'); } };
+    const { app } = createApp({
+      config: CONFIG,
+      upstreamDoc: { ...MOCK_UPSTREAM_DOC, authorization_endpoint: poisoned },
+    });
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({ client_id: 'my-client', response_type: 'code' });
+
+    expect(res.status).toBe(500);
+    expect(res.headers['content-type']).toMatch(/json/);
+    expect(res.body).toEqual({
+      error: 'server_error',
+      error_description: 'An unexpected error occurred',
+    });
+  });
+
+  it('does not leak internal error details in the response', async () => {
+    const poisoned = { toString() { throw new Error('SECRET_DB_PASSWORD=hunter2'); } };
+    const { app } = createApp({
+      config: CONFIG,
+      upstreamDoc: { ...MOCK_UPSTREAM_DOC, authorization_endpoint: poisoned },
+    });
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({ client_id: 'my-client', response_type: 'code' });
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain('SECRET_DB_PASSWORD');
+    expect(JSON.stringify(res.body)).not.toContain('hunter2');
+  });
+});
