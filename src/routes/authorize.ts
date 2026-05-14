@@ -46,7 +46,12 @@ export function createAuthorizeRouter(
 
   const handler = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const params = new URLSearchParams(req.query as Record<string, string>);
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(req.query)) {
+        if (typeof value === 'string') {
+          params.set(key, value);
+        }
+      }
 
       logger.debug('authorize request', {
         ...requestMeta(req),

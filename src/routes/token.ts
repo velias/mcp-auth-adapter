@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import express from 'express';
 import { Logger, requestMeta } from '../logger';
+import { readResponseWithLimit } from '../fetch-utils';
 import { isCimdClientId, validateCimdUrl, resolveUpstreamClientId, sanitizeForError } from '../cimd';
 import { IMetricsRegistry, ICounter, IHistogram } from '../metrics';
 
@@ -124,38 +125,7 @@ async function handleTokenRequest(
 
     let responseBody: Buffer;
     try {
-      const reader = upstreamResponse.body?.getReader();
-      if (!reader) {
-        res.status(502).json({
-          error: 'server_error',
-          error_description: 'Token endpoint upstream returned no body',
-        });
-        return;
-      }
-
-      let totalBytes = 0;
-      const chunks: Uint8Array[] = [];
-      try {
-        for (;;) {
-          const result = await reader.read();
-          if (result.done) break;
-          const chunk = result.value as Uint8Array;
-          totalBytes += chunk.byteLength;
-          if (totalBytes > TOKEN_UPSTREAM_MAX_RESPONSE_BYTES) {
-            reader.cancel().catch(() => {});
-            res.status(502).json({
-              error: 'server_error',
-              error_description: 'Token endpoint upstream response too large',
-            });
-            return;
-          }
-          chunks.push(chunk);
-        }
-      } finally {
-        reader.releaseLock();
-      }
-
-      responseBody = Buffer.concat(chunks);
+      responseBody = await readResponseWithLimit(upstreamResponse, TOKEN_UPSTREAM_MAX_RESPONSE_BYTES);
     } catch (readErr) {
       logger.error('token proxy: failed reading upstream response', { error: String(readErr) });
       res.status(502).json({

@@ -47,6 +47,7 @@ src/
   config.ts          # AppConfig type + loadConfig() from MCP_* env vars
   logger.ts          # Structured line logger (ts= level= msg= ...)
   metrics.ts         # Prometheus metrics primitives (Counter, Gauge, Histogram, Registry, no-op stubs)
+  fetch-utils.ts     # Shared fetch helpers (readResponseWithLimit — streaming read with byte cap)
   middleware/
     security.ts      # requireJsonContentType (Content-Type guard for DCR)
     metrics.ts       # Per-router HTTP request counting and latency middleware

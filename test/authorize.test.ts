@@ -267,6 +267,18 @@ describe('GET /authorize (Auth Proxy)', () => {
     expect(location.searchParams.has('scope')).toBe(false);
   });
 
+  it('silently drops non-string query values (repeated params)', async () => {
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/authorize?client_id=my-client&response_type=code&scope=openid&extra=a&extra=b');
+
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.location);
+    expect(location.searchParams.get('client_id')).toBe('my-client');
+    expect(location.searchParams.has('extra')).toBe(false);
+  });
+
   it('returns 404 when proxyAuthEndpoint is disabled', async () => {
     const app = makeApp({ proxyAuthEndpoint: false });
 
