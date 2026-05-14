@@ -74,7 +74,7 @@ export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions
     app.use(createMetricsRouter(metricsRegistry));
   }
 
-  app.use(express.json());
+  app.use(express.json({ limit: '16kb' }));
 
   let httpMetrics: HttpMetrics | undefined;
   if (config.metricsEnabled) {
