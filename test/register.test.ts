@@ -55,7 +55,7 @@ describe('POST /register (DCR Proxy)', () => {
     expect(res.body.token_endpoint_auth_method).toBe('none');
   });
 
-  it('echoes back request body fields', async () => {
+  it('echoes back recognized RFC 7591 fields', async () => {
     const app = makeApp();
     const body = {
       redirect_uris: ['http://localhost:9000/cb'],
@@ -74,6 +74,31 @@ describe('POST /register (DCR Proxy)', () => {
     expect(res.body.client_name).toBe(body.client_name);
     expect(res.body.grant_types).toEqual(body.grant_types);
     expect(res.body.software_statement).toBe(body.software_statement);
+  });
+
+  it('drops arbitrary fields not in the DCR whitelist', async () => {
+    const app = makeApp();
+    const body = {
+      redirect_uris: ['http://localhost:9000/cb'],
+      client_name: 'Legit Client',
+      arbitrary_key: 'should-be-dropped',
+      __proto__: { injected: true },
+      client_secret: 'fake-secret',
+      registration_access_token: 'fake-token',
+    };
+
+    const res = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send(body);
+
+    expect(res.status).toBe(201);
+    expect(res.body.redirect_uris).toEqual(body.redirect_uris);
+    expect(res.body.client_name).toBe('Legit Client');
+    expect(res.body).not.toHaveProperty('arbitrary_key');
+    expect(res.body).not.toHaveProperty('client_secret');
+    expect(res.body).not.toHaveProperty('registration_access_token');
+    expect(res.body).not.toHaveProperty('injected');
   });
 
   it('sets Cache-Control: no-store header', async () => {
