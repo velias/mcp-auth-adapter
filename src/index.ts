@@ -11,6 +11,7 @@ const DISCOVERY_PATHS = [
   '/.well-known/openid-configuration',
   '/.well-known/oauth-authorization-server',  // RFC 8414 fallback
 ];
+const WELL_KNOWN_FETCH_TIMEOUT_MS = 10_000;
 
 async function fetchUpstreamWellKnown(
   issuerUrl: string,
@@ -20,7 +21,9 @@ async function fetchUpstreamWellKnown(
   for (const path of DISCOVERY_PATHS) {
     const url = `${issuerUrl}${path}`;
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(WELL_KNOWN_FETCH_TIMEOUT_MS),
+      });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} ${response.statusText}`);
       }
