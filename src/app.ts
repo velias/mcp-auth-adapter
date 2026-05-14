@@ -74,6 +74,10 @@ export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions
   let cimdConfig: AuthCimdConfig | undefined;
 
   if (config.cimdEnabled) {
+    if (!state.upstreamTokenEndpoint) {
+      throw new Error('Upstream well-known document is missing token_endpoint (required by CIMD token proxy)');
+    }
+
     const pinnedUrls = new Set(Object.keys(config.cimdMap));
     const cimdCache = new CimdCache({
       ttlMinutes: config.cimdCacheMinutes,

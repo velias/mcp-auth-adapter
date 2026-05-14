@@ -499,3 +499,16 @@ describe('Global JSON error handler', () => {
     expect(JSON.stringify(res.body)).not.toContain('hunter2');
   });
 });
+
+describe('createApp startup guards', () => {
+  it('throws when CIMD is enabled but upstream doc lacks token_endpoint', () => {
+    const docWithoutToken = { ...MOCK_UPSTREAM_DOC };
+    delete docWithoutToken.token_endpoint;
+    expect(() =>
+      createApp({
+        config: { ...CONFIG, cimdEnabled: true, cimdMap: { 'https://example.com/c.json': 'x' }, cimdCacheMinutes: 30 },
+        upstreamDoc: docWithoutToken,
+      }),
+    ).toThrow(/missing token_endpoint/);
+  });
+});
