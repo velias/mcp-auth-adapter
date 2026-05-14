@@ -44,9 +44,15 @@ export function buildUpstreamState(
 export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions): {
   app: Application;
   updateUpstream: (newUpstreamDoc: Record<string, unknown>) => void;
+  setShuttingDown: () => void;
+  isShuttingDown: () => boolean;
 } {
   let state = buildUpstreamState(upstreamDoc, config);
   const logger = createLogger(config.debug);
+
+  let shuttingDown = false;
+  const setShuttingDown = () => { shuttingDown = true; };
+  const isShuttingDown = () => shuttingDown;
 
   const updateUpstream = (newUpstreamDoc: Record<string, unknown>) => {
     state = buildUpstreamState(newUpstreamDoc, config);
@@ -56,7 +62,7 @@ export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions
   app.disable('x-powered-by');
 
   app.use(compression());
-  app.use(createHealthRouter());
+  app.use(createHealthRouter(isShuttingDown));
   app.use(express.json());
 
   app.use(createWellKnownRouter(() => state.wellKnownDocument, logger, config.wellKnownRefreshMinutes));
@@ -99,5 +105,5 @@ export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions
     ));
   }
 
-  return { app, updateUpstream };
+  return { app, updateUpstream, setShuttingDown, isShuttingDown };
 }

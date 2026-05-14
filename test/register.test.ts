@@ -21,6 +21,7 @@ const CONFIG: AppConfig = {
   cimdMap: {},
   cimdCacheMinutes: 30,
   cimdEnabled: false,
+  shutdownTimeoutSeconds: 30,
 };
 
 function makeApp(configOverrides: Partial<AppConfig> = {}) {

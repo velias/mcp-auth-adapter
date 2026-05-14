@@ -21,23 +21,38 @@ const CONFIG: AppConfig = {
   cimdMap: {},
   cimdCacheMinutes: 30,
   cimdEnabled: false,
+  shutdownTimeoutSeconds: 30,
 };
 
 function makeApp() {
   return createApp({
     config: CONFIG,
     upstreamDoc: MOCK_UPSTREAM_DOC,
-  }).app;
+  });
 }
 
 describe('Health probes', () => {
   it('GET /health/live returns 200', async () => {
-    const res = await request(makeApp()).get('/health/live');
+    const res = await request(makeApp().app).get('/health/live');
     expect(res.status).toBe(200);
   });
 
   it('GET /health/ready returns 200', async () => {
-    const res = await request(makeApp()).get('/health/ready');
+    const res = await request(makeApp().app).get('/health/ready');
+    expect(res.status).toBe(200);
+  });
+
+  it('GET /health/ready returns 503 when shutting down', async () => {
+    const { app, setShuttingDown } = makeApp();
+    setShuttingDown();
+    const res = await request(app).get('/health/ready');
+    expect(res.status).toBe(503);
+  });
+
+  it('GET /health/live still returns 200 when shutting down', async () => {
+    const { app, setShuttingDown } = makeApp();
+    setShuttingDown();
+    const res = await request(app).get('/health/live');
     expect(res.status).toBe(200);
   });
 });

@@ -79,6 +79,9 @@ test/
   filtered/merged for clients), the raw `upstreamAuthorizationEndpoint` URL
   (used by the authorize redirect), and `upstreamTokenEndpoint` (used by the
   CIMD token proxy).
+- **Graceful shutdown.** `SIGTERM`/`SIGINT` set `shuttingDown` (readiness probe
+  returns 503), clear the refresh timer, and call `server.close()` to drain
+  in-flight requests with a configurable force-exit timeout.
 - **Well-known whitelist.** Only a curated set of fields from the upstream doc
   is forwarded to clients — see `UPSTREAM_WHITELIST_FIELDS` in
   `src/routes/well-known.ts`.
@@ -100,6 +103,8 @@ Key ones: `MCP_BASE_URL`, `MCP_UPSTREAM_SSO_URL`, `MCP_PROXY_DCR_CLIENT_ID`,
 
 CIMD (EXPERIMENTAL): `MCP_PROXY_CIMD_MAP`, `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID`,
 `MCP_PROXY_CIMD_CACHE_MINUTES`.
+
+Lifecycle: `MCP_SHUTDOWN_TIMEOUT_SECONDS`.
 
 `loadConfig()` in `src/config.ts` validates and returns an `AppConfig` object.
 

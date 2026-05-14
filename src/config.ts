@@ -14,6 +14,7 @@ export interface AppConfig {
   cimdDefaultClientId?: string;
   cimdCacheMinutes: number;
   cimdEnabled: boolean;
+  shutdownTimeoutSeconds: number;
 }
 
 function requireEnv(name: string): string {
@@ -126,5 +127,6 @@ export function loadConfig(): AppConfig {
     cimdDefaultClientId,
     cimdCacheMinutes,
     cimdEnabled,
+    shutdownTimeoutSeconds: parseIntEnv('MCP_SHUTDOWN_TIMEOUT_SECONDS', 30),
   };
 }

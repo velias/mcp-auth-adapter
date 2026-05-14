@@ -78,6 +78,7 @@ Environment variables are used. All variables are prefixed with `MCP_`. A `.env`
 | `MCP_BASE_URL` | Yes | -- | Public base URL of this adapter (**no trailing slash**). Used as `issuer` (RFC 8414 §3.3) and to construct endpoint URLs. Must exactly match what MCP servers advertise in their Protected Resource Metadata `authorization_servers` array. |
 | `MCP_UPSTREAM_SSO_URL` | Yes | -- | Base URL (issuer) of the upstream IdP. Works with any OAuth 2.0 / OIDC provider. Discovery is attempted via `/.well-known/openid-configuration`, then `/.well-known/oauth-authorization-server` (RFC 8414); on failure, fallback endpoints are derived using Keycloak URL conventions ([see below](#upstream-well-known-handling)). |
 | `MCP_PORT` | No | `3000` | Port this app listens on. |
+| `MCP_SHUTDOWN_TIMEOUT_SECONDS` | No | `30` | Maximum seconds to wait for in-flight requests to drain after `SIGTERM`/`SIGINT` before force-exiting. |
 | | | | **Dynamic Client Registration** |
 | `MCP_PROXY_DCR_CLIENT_ID` | No | -- | Fixed `client_id` returned by `POST /register`. Setting this enables the DCR proxy. Must be pre-registered at the upstream IdP as a public client. If omitted, the upstream IdP's registration endpoint is announced directly. |
 | | | | **Scope filtering** (auto-enables `/authorize` proxy) |
@@ -282,10 +283,18 @@ On first startup (and after every `MCP_UPSTREAM_SSO_URL` change), review the ada
 
 | Endpoint | Purpose | Response |
 |---|---|---|
-| `GET /health/live` | **Liveness** -- process is running, HTTP listener responsive | `200` |
-| `GET /health/ready` | **Readiness** -- application initialized, ready to serve | `200` |
+| `GET /health/live` | **Liveness** -- process is running, HTTP listener responsive | `200` always |
+| `GET /health/ready` | **Readiness** -- application initialized, ready to serve | `200` normally, `503` during graceful shutdown |
 
 Both are mounted before body-parsing middleware. Neither checks upstream IdP availability -- the adapter is functional even with fallback defaults.
+
+### Graceful Shutdown
+
+On `SIGTERM` or `SIGINT` the adapter:
+1. Marks itself not-ready (`/health/ready` returns `503`) so the load balancer stops sending new traffic.
+2. Stops accepting new connections.
+3. Drains in-flight requests until complete (or `MCP_SHUTDOWN_TIMEOUT_SECONDS` elapses, default 30 s, then force-exits).
+4. Clears the periodic well-known refresh timer.
 
 ## Development
 

@@ -60,10 +60,10 @@ async function main(): Promise<void> {
     upstreamDoc = buildDefaultUpstreamDoc(config.upstreamSsoUrl);
   }
 
-  const { app, updateUpstream } = createApp({ config, upstreamDoc });
+  const { app, updateUpstream, setShuttingDown } = createApp({ config, upstreamDoc });
 
   const refreshMs = config.wellKnownRefreshMinutes * 60 * 1000;
-  setInterval(() => {
+  const refreshTimer = setInterval(() => {
     void fetchUpstreamWellKnown(config.upstreamSsoUrl, log).then((newDoc) => {
       updateUpstream(newDoc);
       log.info('Upstream well-known document refreshed');
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
     });
   }, refreshMs);
 
-  app.listen(config.port, () => {
+  const server = app.listen(config.port, () => {
     log.info('MCP Auth Adapter started', {
       port: config.port,
       baseUrl: config.baseUrl,
@@ -87,6 +87,35 @@ async function main(): Promise<void> {
       debug: config.debug,
     });
   });
+
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    log.info('Shutdown signal received, draining connections', { signal });
+    setShuttingDown();
+    clearInterval(refreshTimer);
+
+    const forceTimeout = setTimeout(() => {
+      log.error('Graceful shutdown timed out, forcing exit');
+      process.exit(1);
+    }, config.shutdownTimeoutSeconds * 1000);
+    forceTimeout.unref();
+
+    server.close((err) => {
+      clearTimeout(forceTimeout);
+      if (err) {
+        log.error('Error during server close', { error: String(err) });
+        process.exit(1);
+      }
+      log.info('Server closed, exiting');
+      process.exit(0);
+    });
+  };
+
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
 }
 
 const bootstrapLog = createLogger(false);
