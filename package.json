@@ -18,6 +18,26 @@
     "lint:fix": "eslint src/ test/ --fix",
     "prepublishOnly": "npm run lint && npm test && npm run build"
   },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "oauth",
+    "oidc",
+    "auth",
+    "adapter",
+    "proxy",
+    "keycloak",
+    "authorization",
+    "identity-provider",
+    "idp",
+    "well-known",
+    "openid-configuration",
+    "oauth-authorization-server",
+    "dcr",
+    "cimd"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

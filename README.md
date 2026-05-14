@@ -275,6 +275,15 @@ Well-known endpoints return `Cache-Control: public, max-age=<seconds>` (half of 
 
 [RFC 7591 §3](https://rfc-editor.org/rfc/rfc7591#section-3) recommends rate limiting for open DCR endpoints. This adapter does not implement app-level rate limiting -- it should be handled by an external WAF or reverse proxy (e.g. Akamai, Cloudflare, nginx).
 
+### CORS
+
+This adapter intentionally does **not** set CORS headers. All endpoints are designed for server-to-server or redirect-based flows (well-known discovery, DCR, authorize redirects, token proxy) -- none require browser `XMLHttpRequest`/`fetch` access from a different origin. The absence of CORS headers also provides a CSRF defense layer for the DCR endpoint.
+
+This means **browser-based MCP clients** (single-page apps that call these endpoints directly via JavaScript) will not work out of the box. If your deployment requires browser-based access, you have two options:
+
+1. **Reverse proxy** -- configure CORS at the reverse proxy layer (e.g. nginx, Akamai, Cloudflare). Recommended for production deployments that already have a reverse proxy.
+2. **Built-in CORS** (not yet implemented) -- a config option to enable CORS directly in the adapter for simpler deployments, development, and testing. Create feature request please if you need it.
+
 ### Upstream IdP Compatibility
 
 On first startup (and after every `MCP_UPSTREAM_SSO_URL` change), review the adapter's log output for warnings prefixed with `Upstream IdP compatibility:`. These indicate the upstream IdP may not fully support MCP authorization requirements -- for example, missing `authorization_endpoint`, missing `token_endpoint`, or missing PKCE support (`code_challenge_methods_supported` without `S256`). The adapter injects safe defaults where possible, but these warnings should be investigated to ensure the upstream IdP is correctly configured for MCP flows.
