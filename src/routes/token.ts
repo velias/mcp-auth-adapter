@@ -37,8 +37,8 @@ export function createTokenRouter(
       return;
     }
     next();
-  }, urlencodedParser, (req: Request, res: Response) => {
-    void handleTokenRequest(req, res, getUpstreamTokenEndpoint, cimdResolver, logger, upstreamDuration, upstreamStatus);
+  }, urlencodedParser, async (req: Request, res: Response) => {
+    await handleTokenRequest(req, res, getUpstreamTokenEndpoint, cimdResolver, logger, upstreamDuration, upstreamStatus);
   });
 
   return router;
