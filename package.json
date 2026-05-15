@@ -16,6 +16,7 @@
     "test": "jest",
     "lint": "eslint src/ test/",
     "lint:fix": "eslint src/ test/ --fix",
+    "changelog": "bash scripts/generate-changelog.sh",
     "prepublishOnly": "npm run lint && npm test && npm run build"
   },
   "engines": {

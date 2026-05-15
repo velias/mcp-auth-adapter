@@ -21,6 +21,8 @@ add context, highlight important changes, or remove noise.
 ## Prerequisites
 
 - Push access to `main`
+- [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated
+  (`gh auth login`) -- used by `npm run changelog` to fetch release notes
 - `NPM_TOKEN` configured as a **Repository secret** in GitHub Actions:
   Settings > Secrets and variables > Actions > Repository secrets
   (https://github.com/velias/mcp-auth-adapter/settings/secrets/actions)
@@ -42,6 +44,9 @@ add context, highlight important changes, or remove noise.
    - Build and push a container image to `ghcr.io/velias/mcp-auth-adapter`
      with tags `X.Y.Z`, `X.Y`, `X`, and `latest`
 6. (Optional) Edit the GitHub Release notes in the UI to curate
+7. Run `npm run changelog` to regenerate `CHANGELOG.md` from all GitHub
+   Releases, then commit and push the result. This can also be re-run later
+   if you edit release notes after the fact.
 
 ## Version guidance
 
