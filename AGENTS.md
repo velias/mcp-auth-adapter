@@ -30,7 +30,7 @@ issue tokens — all real auth/token work stays on the upstream IdP.
 | Area        | Choice                                       |
 |-------------|----------------------------------------------|
 | Runtime     | Node.js >= 18                                |
-| Language    | TypeScript 5.6 (strict mode)                  |
+| Language    | TypeScript 6.x (strict mode)                  |
 | HTTP        | Express 5.x                                   |
 | Tests       | Jest + ts-jest + supertest (in-memory, no I/O)|
 | Lint        | ESLint 10 flat config + typescript-eslint      |
