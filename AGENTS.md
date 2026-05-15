@@ -15,6 +15,11 @@ issue tokens — all real auth/token work stays on the upstream IdP.
   authorization, and token proxy URLs).
 - **Dynamic Client Registration (DCR)** — `POST /register` returns a fixed,
   pre-configured `client_id` (RFC 7591 style, public client).
+  Validates `redirect_uris` format (parseable URI, no fragments per
+  RFC 6749 §3.1.2; any scheme including custom/private-use per RFC 8252 §7.1)
+  and type-checks `grant_types`/`response_types` (must be arrays of strings).
+  Invalid input returns RFC 7591 `invalid_client_metadata` errors.
+  Debug logs include `client_name` and `redirect_uris` count for audit.
   Auto-enables when `MCP_PROXY_DCR_CLIENT_ID` is set.
 - **Authorization adapter** — `GET /authorize` forwards to the upstream
   authorization URL with configurable scope filtering and optional CIMD
@@ -54,14 +59,14 @@ src/
   cimd.ts            # CIMD URL validation, document fetch/validation, cache, resolution (EXPERIMENTAL)
   routes/
     well-known.ts    # /.well-known/* — filtered upstream OIDC metadata
-    register.ts      # POST /register — fixed client_id DCR
+    register.ts      # POST /register — fixed client_id DCR with input validation
     authorize.ts     # GET /authorize — redirect adapter, scope filtering, CIMD client_id substitution
     token.ts         # POST /token — token endpoint proxy with CIMD client_id substitution (EXPERIMENTAL)
     health.ts        # /health/live, /health/ready
     metrics.ts       # GET /metrics — Prometheus text exposition format endpoint
 test/
   well-known.test.ts # Well-known doc content, whitelist, cache-control, refresh, CIMD fields
-  register.test.ts   # DCR response, content-type guard, feature flag
+  register.test.ts   # DCR response, input validation, content-type guard, feature flag
   authorize.test.ts  # Redirect, configurable scope filtering, feature flag, CIMD integration
   token.test.ts      # Token proxy: substitution, passthrough, security, error handling
   cimd.test.ts       # CIMD URL/doc validation, cache, resolution, IP checks

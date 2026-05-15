@@ -135,6 +135,181 @@ describe('POST /register (DCR Proxy)', () => {
     expect(res.status).toBe(404);
   });
 
+  describe('DCR input validation', () => {
+    describe('redirect_uris', () => {
+      it('rejects non-array redirect_uris', async () => {
+        const app = makeApp();
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ redirect_uris: 'http://localhost/cb' });
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe('invalid_client_metadata');
+        expect(res.body.error_description).toContain('redirect_uris');
+      });
+
+      it('rejects non-string entry in redirect_uris', async () => {
+        const app = makeApp();
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ redirect_uris: [123] });
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe('invalid_client_metadata');
+        expect(res.body.error_description).toContain('redirect_uris[0]');
+      });
+
+      it('rejects URI with fragment (RFC 6749 §3.1.2)', async () => {
+        const app = makeApp();
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ redirect_uris: ['http://localhost/cb#frag'] });
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe('invalid_client_metadata');
+        expect(res.body.error_description).toContain('fragment');
+      });
+
+      it('rejects unparseable URI', async () => {
+        const app = makeApp();
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ redirect_uris: ['://not-a-uri'] });
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe('invalid_client_metadata');
+        expect(res.body.error_description).toContain('redirect_uris[0]');
+      });
+
+      it('accepts http and https schemes', async () => {
+        const app = makeApp();
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ redirect_uris: ['http://localhost:9999/cb', 'https://app.example.com/cb'] });
+
+        expect(res.status).toBe(201);
+        expect(res.body.redirect_uris).toEqual(['http://localhost:9999/cb', 'https://app.example.com/cb']);
+      });
+
+      it('accepts custom URI schemes (RFC 8252 §7.1)', async () => {
+        const app = makeApp();
+        const uris = [
+          'cursor://anysphere.cursor-mcp/callback',
+          'vscode://vscode.github-authentication/callback',
+        ];
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ redirect_uris: uris });
+
+        expect(res.status).toBe(201);
+        expect(res.body.redirect_uris).toEqual(uris);
+      });
+
+      it('accepts empty array', async () => {
+        const app = makeApp();
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ redirect_uris: [] });
+
+        expect(res.status).toBe(201);
+        expect(res.body.redirect_uris).toEqual([]);
+      });
+    });
+
+    describe('grant_types', () => {
+      it('rejects non-array grant_types', async () => {
+        const app = makeApp();
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ grant_types: 'authorization_code' });
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe('invalid_client_metadata');
+        expect(res.body.error_description).toContain('grant_types');
+      });
+
+      it('rejects non-string entry in grant_types', async () => {
+        const app = makeApp();
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ grant_types: [42] });
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe('invalid_client_metadata');
+        expect(res.body.error_description).toContain('grant_types[0]');
+      });
+
+      it('accepts diverse grant types', async () => {
+        const app = makeApp();
+        const types = ['authorization_code', 'refresh_token', 'client_credentials'];
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ grant_types: types });
+
+        expect(res.status).toBe(201);
+        expect(res.body.grant_types).toEqual(types);
+      });
+    });
+
+    describe('response_types', () => {
+      it('rejects non-array response_types', async () => {
+        const app = makeApp();
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ response_types: 'code' });
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe('invalid_client_metadata');
+        expect(res.body.error_description).toContain('response_types');
+      });
+
+      it('rejects non-string entry in response_types', async () => {
+        const app = makeApp();
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ response_types: [null] });
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe('invalid_client_metadata');
+        expect(res.body.error_description).toContain('response_types[0]');
+      });
+
+      it('accepts any string values', async () => {
+        const app = makeApp();
+        const res = await request(app)
+          .post('/register')
+          .set('Content-Type', 'application/json')
+          .send({ response_types: ['code', 'token'] });
+
+        expect(res.status).toBe(201);
+        expect(res.body.response_types).toEqual(['code', 'token']);
+      });
+    });
+
+    it('empty body still returns 201', async () => {
+      const app = makeApp();
+      const res = await request(app)
+        .post('/register')
+        .set('Content-Type', 'application/json')
+        .send({});
+
+      expect(res.status).toBe(201);
+      expect(res.body.client_id).toBe('fixed-test-client');
+    });
+  });
+
   describe('Content-Type enforcement (CSRF protection)', () => {
     it('rejects requests without Content-Type header', async () => {
       const app = makeApp();
