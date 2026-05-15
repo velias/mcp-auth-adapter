@@ -296,6 +296,14 @@ describe('isPrivateIP', () => {
     expect(isPrivateIP('169.254.0.1')).toBe(true);
   });
 
+  it('detects 100.64.0.0/10 (RFC 6598 Shared Address Space) as private', () => {
+    expect(isPrivateIP('100.64.0.1')).toBe(true);
+    expect(isPrivateIP('100.100.100.100')).toBe(true);
+    expect(isPrivateIP('100.127.255.255')).toBe(true);
+    expect(isPrivateIP('100.63.255.255')).toBe(false);
+    expect(isPrivateIP('100.128.0.1')).toBe(false);
+  });
+
   it('detects 0.0.0.0 as private', () => {
     expect(isPrivateIP('0.0.0.0')).toBe(true);
   });
@@ -322,6 +330,7 @@ describe('isPrivateIP', () => {
     expect(isPrivateIP('::ffff:10.0.0.1')).toBe(true);
     expect(isPrivateIP('::ffff:192.168.1.1')).toBe(true);
     expect(isPrivateIP('::ffff:127.0.0.1')).toBe(true);
+    expect(isPrivateIP('::ffff:100.64.0.1')).toBe(true);
   });
 
   it('allows IPv6-mapped IPv4 public addresses', () => {

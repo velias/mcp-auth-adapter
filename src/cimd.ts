@@ -171,6 +171,8 @@ function isPrivateIPv4(ip: string): boolean {
   if (parts[0] === 127) return true;
   // 169.254.0.0/16
   if (parts[0] === 169 && parts[1] === 254) return true;
+  // 100.64.0.0/10 (RFC 6598 Shared Address Space / Carrier-Grade NAT)
+  if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true;
   // 0.0.0.0
   if (parts.every(p => p === 0)) return true;
   return false;

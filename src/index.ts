@@ -4,6 +4,7 @@ import { loadConfig } from './config';
 import { createApp } from './app';
 import { createLogger, Logger } from './logger';
 import { IMetricsRegistry } from './metrics';
+import { readResponseWithLimit } from './fetch-utils';
 import { buildDefaultUpstreamDoc, validateUpstreamDoc } from './routes/well-known';
 import { version } from '../package.json';
 
@@ -13,6 +14,7 @@ const DISCOVERY_PATHS = [
   '/.well-known/oauth-authorization-server',  // RFC 8414 fallback
 ];
 const WELL_KNOWN_FETCH_TIMEOUT_MS = 10_000;
+const WELL_KNOWN_MAX_BYTES = 256 * 1024;
 
 async function fetchUpstreamWellKnown(
   issuerUrl: string,
@@ -31,7 +33,8 @@ async function fetchUpstreamWellKnown(
       if (path !== DISCOVERY_PATHS[0]) {
         log?.info(`Upstream well-known fetched via fallback path ${path}`);
       }
-      return response.json() as Promise<Record<string, unknown>>;
+      const body = await readResponseWithLimit(response, WELL_KNOWN_MAX_BYTES);
+      return JSON.parse(body.toString('utf-8')) as Record<string, unknown>;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       log?.debug(`Discovery fetch failed for ${path}`, { error: String(err) });

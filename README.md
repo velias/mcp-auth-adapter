@@ -455,6 +455,10 @@ The adapter only exposes a strict whitelist of upstream fields. New upstream fie
 
 Note: This list is informative only, anything not included in `UPSTREAM_WHITELIST_FIELDS` is automatically excluded.
 
+## Security review
+
+An [OWASP Top 10 security review](docs/owasp-security-review-2026-05-15.md) was performed on 2026-05-15. No critical issues were found. If you discover a security vulnerability, please report it responsibly via [GitHub Security Advisories](https://github.com/velias/mcp-auth-adapter/security/advisories).
+
 ## Contributing
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. All PRs must reference a GitHub issue, and new features should be discussed in an issue before implementation.
