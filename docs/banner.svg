@@ -1,5 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 80">
-  <text x="360" y="50" text-anchor="middle" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-size="26" font-weight="700" font-style="italic" fill="#808080" letter-spacing="0.5">
-    &#x201C; Make your corporate IdP MCP-ready, now! &#x201D;
+  <text x="360" y="50" text-anchor="middle"
+    font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-size="26" font-weight="700"
+    font-style="italic" fill="#808080" letter-spacing="0.5">
+    &#x201C; Make your existing IdP MCP-ready, now! &#x201D;
   </text>
 </svg>

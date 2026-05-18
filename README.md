@@ -1,7 +1,7 @@
 # MCP Auth Adapter
 
 <p align="center">
-  <img src="docs/banner.svg" alt="Make your corporate IdP MCP-ready, now!" width="720"/>
+  <img src="docs/banner.svg" alt="Make your existing IdP MCP-ready, now!" width="720"/>
 </p>
 
 [![CI](https://github.com/velias/mcp-auth-adapter/actions/workflows/ci.yml/badge.svg)](https://github.com/velias/mcp-auth-adapter/actions/workflows/ci.yml)
@@ -15,9 +15,9 @@ MCP servers [announce this adapter as their authorization server](https://modelc
 ### Features
 
 - **Well-known discovery** (`/.well-known/openid-configuration`, `/.well-known/oauth-authorization-server`) -- filtered, MCP-focused view of the upstream IdP metadata with injected adapter endpoints and tailored configurations.
-- **Open Dynamic Client Registration** (`POST /register`, optional) -- returns a pre-configured fixed `client_id` for all registering MCP clients per [RFC 7591](https://rfc-editor.org/rfc/rfc7591). Validates `redirect_uris` format (no fragments per RFC 6749 §3.1.2, any scheme including custom/private-use per RFC 8252 §7.1), and type-checks `grant_types` / `response_types` arrays. Invalid input returns RFC 7591 `invalid_client_metadata` errors.
-- **Authorization proxy** (`GET /authorize`, optional) -- intercepts authorization requests, applies configurable scope filtering and/or CIMD `client_id` substitution, and redirects to the upstream IdP.
-- **CIMD adapter** (`GET /authorize` + `POST /token`, EXPERIMENTAL, optional) -- accepts [Client ID Metadata Document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) style `client_id` URLs, validates metadata documents, and maps them to pre-configured fixed upstream IdP client_ids. See [CIMD Adapter](#cimd-adapter-experimental).
+- **Open Dynamic Client Registration** (`POST /register`, optional) -- returns a pre-configured fixed `client_id` for all registering MCP clients per [RFC 7591](https://rfc-editor.org/rfc/rfc7591).
+- **Scope filtering during authentication** (`GET /authorize`, optional) -- intercepts authorization requests to modify scopes and redirect to the upstream IdP
+  **CIMD adapter** (`GET /authorize` + `POST /token`, EXPERIMENTAL, optional) -- accepts [Client ID Metadata Document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) style `client_id` URLs, validates metadata documents, and maps them to pre-configured fixed upstream IdP client_ids. See [CIMD Adapter](#cimd-adapter-experimental).
 
 ## Container Image
 
