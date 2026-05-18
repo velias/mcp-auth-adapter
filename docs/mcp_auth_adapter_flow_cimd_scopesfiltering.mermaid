@@ -1,0 +1,40 @@
+sequenceDiagram
+    autonumber
+    participant Client as MCP Client<br/>(Claude, Cursor, etc.)
+    participant ClientHost as Client Metadata Host<br/>(https://client.example/.well-known/oauth-client)
+    participant Proxy as MCP Auth Adapter
+    participant SSO as Upstream IdP
+    participant MCPServer as MCP Server
+
+    Note over Client, MCPServer: 1. Initialization
+    Client->>MCPServer: Connects to server
+    MCPServer-->>Client: Announces MCP Auth Adapter as Authorization Server
+    Client->>Proxy: GET /.well-known/openid-configuration
+    Proxy->>SSO: GET /.well-known/openid-configuration
+    SSO-->>Proxy: Returns descriptor
+    Proxy-->>Client: Returns filtered descriptor (adapted scopes, injected own authorize & token endpoints)
+
+    Note over Client, SSO: 2. Authorization with CIMD client_id
+    Client->>Proxy: GET /authorize (client_id=https://client.example/.well-known/oauth-client, scopes, redirect_uri)
+    Proxy->>ClientHost: GET https://client.example/.well-known/oauth-client (fetch CIMD metadata)
+    ClientHost-->>Proxy: Returns CIMD JSON (client_id, redirect_uris, client_name, ...)
+    Note over Proxy: Validates CIMD document (client_id match, redirect_uri match, public client only)
+    Note over Proxy: Resolves CIMD URL → upstream IdP client_id via configured map
+    Note over Proxy: Filters scopes (e.g. strips "offline_access")
+    Proxy-->>Client: 302 Redirect to Upstream IdP /authorize (with substituted client_id & filtered scopes)
+    Client->>SSO: Authenticates user, consent screen shown
+    SSO-->>Client: Redirects back with authorization code
+
+    Note over Client, SSO: 3. Token Exchange with CIMD client_id
+    Client->>Proxy: POST /token (client_id=https://client.example/.well-known/oauth-client, code, redirect_uri)
+    Note over Proxy: Validates CIMD URL, resolves to upstream client_id
+    Proxy->>SSO: POST /token (with substituted upstream client_id)
+    SSO-->>Proxy: Returns Access Token (+ Refresh Token)
+    Proxy-->>Client: Relays token response
+
+    Note over Client, MCPServer: 4. Secure Resource Access & Access Token Validation
+    Client->>MCPServer: Sends MCP request (e.g. tool call) with Access Token
+    MCPServer->>Proxy: GET /.well-known/openid-configuration
+    Proxy-->>MCPServer: Returns descriptor containing JWKS (Certificate) URI from Upstream IdP
+    MCPServer-->>SSO: Fetches Certificate used to sign Access Token
+    MCPServer->>MCPServer: Validates the Access Token signature & claims<br/>Authenticates and authorizes request

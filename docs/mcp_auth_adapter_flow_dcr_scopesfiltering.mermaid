@@ -1,0 +1,32 @@
+sequenceDiagram
+    autonumber
+    participant Client as MCP Client<br/>(Claude, Cursor, etc.)
+    participant Proxy as MCP Auth Adapter
+    participant SSO as Upstream IdP
+    participant MCPServer as MCP Server
+
+    Note over Client, MCPServer: 1. Initialization
+    Client->>MCPServer: Connects to server
+    MCPServer-->>Client: Announces MCP Auth Adapter as Authorization Server
+    Client->>Proxy: GET /.well-known/openid-configuration
+    Proxy->>SSO: GET /.well-known/openid-configuration
+    SSO-->>Proxy: Returns descriptor
+    Proxy-->>Client: Returns filtered descriptor (adapted scopes, injected own endpoints)
+    Note over Client, SSO: 2. Open Dynamic Client Registration (DCR)
+    Client->>Proxy: POST /register
+    Proxy-->>Client: Returns pre-configured fixed  client_id from Upstream IdP
+    
+    Note over Client, SSO: 3. Authorization & Token Issuance
+    Client->>Proxy: GET /authorize (with client_id and  requested scopes)
+    Note over Proxy: Intercepts & filters scopes (e.g. strips "offline_access")
+    Proxy-->>Client: Redirects client to Upstream IdP  /authorize
+    Client->>SSO: Authenticates user, consent screen shown
+    SSO-->>Client: Issues Access Token via token exchange
+    
+    Note over Client, MCPServer: 4. Secure Resource Access & Access Token Validation
+    Client->>MCPServer: Sends MCP request (e.g. tool call) with Access Token
+    
+    MCPServer->>Proxy: GET /.well-known/openid-configuration
+    Proxy-->>MCPServer: Returns descriptor containing JWKS (Certificate) URI from Upstream IdP (loaded in step 5)
+    MCPServer-->>SSO: Fetches Certificate used to sign Access Token
+    MCPServer->>MCPServer: Validates the Acces Token signature & claims<br/>Authenticates and authorizes request

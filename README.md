@@ -8,7 +8,7 @@
 [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/velias/f550f0ffe68a574a690032088359fef3/raw/mcp-auth-adapter-coverage.json)](https://github.com/velias/mcp-auth-adapter/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/velias/mcp-auth-adapter/badge)](https://securityscorecards.dev/viewer/?uri=github.com/velias/mcp-auth-adapter)
 
-An OAuth/OIDC authentication adapter for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) clients. It sits in front of any OAuth 2.0 / OIDC upstream IdP that serves standard discovery metadata -- such as Keycloak, Auth0, Okta, Azure AD (Entra ID), Google Identity, or any provider serving standard OAuth 2.0 / OIDC discovery metadata -- and provides functionality required by the [MCP Authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) for the most common MCP clients (Claude Code/Desktop, Cursor IDE, ChatGPT, Gemini CLI, VS Code, ...) and [their known problematic behaviours](#known-mcp-client-behaviors).
+An OAuth/OIDC authentication adapter for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) clients. It sits in front of any OAuth 2.0 / OIDC upstream IdP that serves standard discovery metadata -- such as Keycloak, Auth0, Okta, Azure AD, Google Identity, or any provider serving standard OAuth 2.0 / OIDC discovery metadata -- and provides functionality required by the [MCP Authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) for the most common MCP clients (Claude Code/Desktop, Cursor IDE, ChatGPT, Gemini CLI, VS Code, ...) and [their known problematic behaviours](#known-mcp-client-behaviors).
 
 MCP servers [announce this adapter as their authorization server](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#authorization-server-discovery). MCP clients discover it via `.well-known` and interact with its endpoints. **Authentication itself, token issuing, and token exchanges are all performed by the upstream IdP** -- this adapter is only a very thin, transparent, stateless facade.
 
@@ -18,6 +18,8 @@ MCP servers [announce this adapter as their authorization server](https://modelc
 - **Open Dynamic Client Registration** (`POST /register`, optional) -- returns a pre-configured fixed `client_id` for all registering MCP clients per [RFC 7591](https://rfc-editor.org/rfc/rfc7591).
 - **Scope filtering during authentication** (`GET /authorize`, optional) -- intercepts authorization requests to modify scopes and redirect to the upstream IdP
   **CIMD adapter** (`GET /authorize` + `POST /token`, EXPERIMENTAL, optional) -- accepts [Client ID Metadata Document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) style `client_id` URLs, validates metadata documents, and maps them to pre-configured fixed upstream IdP client_ids. See [CIMD Adapter](#cimd-adapter-experimental).
+
+See [Flow Diagrams](#flow-diagrams) to understand functionality better.
 
 ## Container Image
 
@@ -188,6 +190,8 @@ When configured, the adapter bridges MCP clients using CIMD-style `client_id` (H
 4. Validates `redirect_uri` against the document's `redirect_uris` (exact match per RFC 9700)
 5. Substitutes the CIMD `client_id` with a pre-registered upstream IdP client_id
 6. Forwards the request to the upstream IdP
+
+See [flow diagram](#cimd-experimantal-and-scopes-filtering).
 
 **Configuration example:**
 ```bash
@@ -454,6 +458,18 @@ The adapter only exposes a strict whitelist of upstream fields. New upstream fie
 | Misc | `claim_types_supported`, `claims_parameter_supported`, `acr_values_supported`, `prompt_values_supported` | Not needed for standard MCP flows. |
 
 Note: This list is informative only, anything not included in `UPSTREAM_WHITELIST_FIELDS` is automatically excluded.
+
+## Flow Diagrams
+
+Detailed interaction between different components when MCP Authentication happens.
+
+### Open DCR and scopes filtering
+
+<img src="docs/mcp_auth_adapter_flow_dcr_scopesfiltering.png" width="1024">
+
+### CIMD (EXPERIMANTAL) and scopes filtering
+
+<img src="docs/mcp_auth_adapter_flow_cimd_scopesfiltering.png" width="1024">
 
 ## Security review
 
