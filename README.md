@@ -465,11 +465,11 @@ Detailed interaction between different components when MCP Authentication happen
 
 ### Open DCR and scopes filtering
 
-<img src="docs/mcp_auth_adapter_flow_dcr_scopesfiltering.png" width="1024">
+<img src="docs/mcp_auth_adapter_flow_dcr_scopesfiltering.png" alt="Flow diagram with Open DCR and scopes filtering" width="1024">
 
 ### CIMD (EXPERIMANTAL) and scopes filtering
 
-<img src="docs/mcp_auth_adapter_flow_cimd_scopesfiltering.png" width="1024">
+<img src="docs/mcp_auth_adapter_flow_cimd_scopesfiltering.png" alt="Flow diagram with CIMD and scopes filtering" width="1024">
 
 ## Security review
 
