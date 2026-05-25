@@ -5,6 +5,19 @@ This file is auto-generated from [GitHub Releases](https://github.com/velias/mcp
 
 ---
 
+## [v1.0.1](https://github.com/velias/mcp-auth-adapter/releases/tag/v1.0.1) — 2026-05-25
+
+### Features
+* Improved DRC request validation
+
+### Other Changes
+* Bump qs from 6.15.1 to 6.15.2
+* Bump the dev-dependencies and Github actions
+
+**Full Changelog**: https://github.com/velias/mcp-auth-adapter/compare/v1.0.0...v1.0.1
+
+---
+
 ## [v1.0.0](https://github.com/velias/mcp-auth-adapter/releases/tag/v1.0.0) — 2026-05-15
 
 ### Features

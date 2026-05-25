@@ -60,11 +60,11 @@ add context, highlight important changes, or remove noise.
 2. Click **Generate New Token** > **Granular Access Token**
 3. Configure:
    - **Token name**: e.g. `mcp-auth-adapter-github`
-   - **Expiration**: 90 or 365 days (your preference)
+   - **Expiration**: 90 days (or your preference)
    - **Bypass two-factor authentication**: **checked** (required for CI)
    - **Allowed IP ranges**: leave empty
-   - **Packages and scopes**: Read and write, All packages
-   - **Organizations**: No access
+   - **Packages and scopes**: `Read and write`, `All packages` or better `mcp-auth-adapter` package only
+   - **Organizations**: `No access`
 4. Click **Generate token** and copy the value
 5. Go to **GitHub repo > Settings > Secrets and variables > Actions**
    (https://github.com/velias/mcp-auth-adapter/settings/secrets/actions)
@@ -78,7 +78,7 @@ The npm token has an **expiration date**. Check it at
 [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens).
 
 **When the token expires, `npm publish` in the release workflow will fail with
-a 401 or 403 error.**
+a 401 or 403 or 404 error.**
 
 To rotate:
 
