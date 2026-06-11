@@ -171,6 +171,8 @@ const MOCK_UPSTREAM_DOC: Record<string, unknown> = {
   code_challenge_methods_supported: ['S256'],
 };
 
+const TEST_STATE_SECRET = Buffer.from('a'.repeat(64), 'hex');
+
 const BASE_CONFIG: AppConfig = {
   baseUrl: 'http://localhost:3000',
   port: 3000,
@@ -185,6 +187,8 @@ const BASE_CONFIG: AppConfig = {
   cimdEnabled: false,
   metricsEnabled: true,
   shutdownTimeoutSeconds: 30,
+  authStateTtlSeconds: 1800,
+  allowedRedirectUris: ['http://localhost:*'],
 };
 
 describe('/metrics endpoint', () => {
@@ -320,12 +324,13 @@ describe('HTTP metrics — /authorize route', () => {
     ...BASE_CONFIG,
     proxyAuthEndpoint: true,
     authScopesRemoved: ['offline_access'],
+    authStateSecret: TEST_STATE_SECRET,
   };
 
   it('records metrics for authorize redirects', async () => {
     const { app } = createApp({ config: AUTH_CONFIG, upstreamDoc: MOCK_UPSTREAM_DOC });
     await request(app)
-      .get('/authorize?response_type=code&client_id=test&redirect_uri=http%3A%2F%2Flocalhost&code_challenge=abc&code_challenge_method=S256');
+      .get('/authorize?response_type=code&client_id=test&redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcallback&code_challenge=abc&code_challenge_method=S256');
     const res = await request(app).get('/metrics');
     expect(res.text).toContain('path="/authorize"');
     expect(res.text).toContain('status="302"');
@@ -341,6 +346,7 @@ describe('HTTP metrics — /token route', () => {
     proxyAuthEndpoint: true,
     cimdEnabled: true,
     cimdMap: { 'https://example.com/oauth-client.json': 'upstream-client' },
+    authStateSecret: TEST_STATE_SECRET,
   };
 
   it('records metrics for token proxy requests', async () => {

@@ -12,6 +12,8 @@ const MOCK_UPSTREAM_DOC: Record<string, unknown> = {
   code_challenge_methods_supported: ['S256'],
 };
 
+const TEST_STATE_SECRET = Buffer.from('a'.repeat(64), 'hex');
+
 const CONFIG: AppConfig = {
   baseUrl: 'http://localhost:3000',
   port: 3000,
@@ -27,6 +29,9 @@ const CONFIG: AppConfig = {
   cimdEnabled: false,
   metricsEnabled: false,
   shutdownTimeoutSeconds: 30,
+  authStateSecret: TEST_STATE_SECRET,
+  authStateTtlSeconds: 1800,
+  allowedRedirectUris: ['http://localhost:*', 'http://127.0.0.1:*'],
 };
 
 function makeApp(configOverrides: Partial<AppConfig> = {}) {
@@ -73,7 +78,7 @@ describe('filterScopes (unit)', () => {
 });
 
 describe('GET /authorize (Auth Proxy)', () => {
-  it('redirects to upstream authorization endpoint', async () => {
+  it('redirects to upstream authorization endpoint with rewritten redirect_uri and state', async () => {
     const app = makeApp();
 
     const res = await request(app)
@@ -90,10 +95,12 @@ describe('GET /authorize (Auth Proxy)', () => {
     const location = new URL(res.headers.location);
     expect(location.origin + location.pathname).toBe(UPSTREAM_AUTH_ENDPOINT);
     expect(location.searchParams.get('client_id')).toBe('my-client');
-    expect(location.searchParams.get('redirect_uri')).toBe('http://localhost:8080/callback');
+    expect(location.searchParams.get('redirect_uri')).toBe('http://localhost:3000/authorize/callback');
     expect(location.searchParams.get('response_type')).toBe('code');
     expect(location.searchParams.get('scope')).toBe('openid profile');
-    expect(location.searchParams.get('state')).toBe('abc123');
+    // State is now a signed blob containing original state
+    expect(location.searchParams.get('state')).not.toBe('abc123');
+    expect(location.searchParams.get('state')!.length).toBeGreaterThan(10);
   });
 
   describe('Scope removal mode (authScopesRemoved)', () => {
@@ -104,6 +111,7 @@ describe('GET /authorize (Auth Proxy)', () => {
         .get('/authorize')
         .query({
           client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
           response_type: 'code',
           scope: 'openid offline_access profile',
         });
@@ -120,6 +128,7 @@ describe('GET /authorize (Auth Proxy)', () => {
         .get('/authorize')
         .query({
           client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
           response_type: 'code',
           scope: 'openid offline_access profile email',
         });
@@ -136,6 +145,7 @@ describe('GET /authorize (Auth Proxy)', () => {
         .get('/authorize')
         .query({
           client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
           response_type: 'code',
           scope: 'offline_access',
         });
@@ -157,6 +167,7 @@ describe('GET /authorize (Auth Proxy)', () => {
         .get('/authorize')
         .query({
           client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
           response_type: 'code',
           scope: 'openid offline_access profile email',
         });
@@ -176,6 +187,7 @@ describe('GET /authorize (Auth Proxy)', () => {
         .get('/authorize')
         .query({
           client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
           response_type: 'code',
           scope: 'offline_access email',
         });
@@ -195,6 +207,7 @@ describe('GET /authorize (Auth Proxy)', () => {
         .get('/authorize')
         .query({
           client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
           response_type: 'code',
           scope: 'openid offline_access profile',
         });
@@ -216,6 +229,7 @@ describe('GET /authorize (Auth Proxy)', () => {
         .get('/authorize')
         .query({
           client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
           response_type: 'code',
           scope: 'openid offline_access profile email',
         });
@@ -226,7 +240,7 @@ describe('GET /authorize (Auth Proxy)', () => {
     });
   });
 
-  it('preserves all security-critical parameters', async () => {
+  it('preserves security-critical parameters (code_challenge, nonce, resource)', async () => {
     const app = makeApp();
 
     const res = await request(app)
@@ -245,14 +259,15 @@ describe('GET /authorize (Auth Proxy)', () => {
 
     expect(res.status).toBe(302);
     const location = new URL(res.headers.location);
-    expect(location.searchParams.get('state')).toBe('state-value');
+    // state is wrapped in signed blob (not the original value)
+    expect(location.searchParams.get('state')).not.toBe('state-value');
     expect(location.searchParams.get('code_challenge')).toBe('challenge123');
     expect(location.searchParams.get('code_challenge_method')).toBe('S256');
     expect(location.searchParams.get('nonce')).toBe('nonce-value');
     expect(location.searchParams.get('resource')).toBe('https://mcp.example.com');
   });
 
-  it('works when no scope parameter is present', async () => {
+  it('requires redirect_uri when state config is active', async () => {
     const app = makeApp();
 
     const res = await request(app)
@@ -262,21 +277,87 @@ describe('GET /authorize (Auth Proxy)', () => {
         response_type: 'code',
       });
 
-    expect(res.status).toBe(302);
-    const location = new URL(res.headers.location);
-    expect(location.searchParams.has('scope')).toBe(false);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_request');
+    expect(res.body.error_description).toContain('redirect_uri');
   });
 
   it('silently drops non-string query values (repeated params)', async () => {
     const app = makeApp();
 
     const res = await request(app)
-      .get('/authorize?client_id=my-client&response_type=code&scope=openid&extra=a&extra=b');
+      .get('/authorize?client_id=my-client&redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcallback&response_type=code&scope=openid&extra=a&extra=b');
 
     expect(res.status).toBe(302);
     const location = new URL(res.headers.location);
     expect(location.searchParams.get('client_id')).toBe('my-client');
     expect(location.searchParams.has('extra')).toBe(false);
+  });
+
+  it('strips unsupported response_mode (fragment)', async () => {
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'my-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+        response_mode: 'fragment',
+      });
+
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.location);
+    expect(location.searchParams.has('response_mode')).toBe(false);
+  });
+
+  it('preserves response_mode=query', async () => {
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'my-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+        response_mode: 'query',
+      });
+
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.location);
+    expect(location.searchParams.get('response_mode')).toBe('query');
+  });
+
+  it('rejects redirect_uri with fragment (security)', async () => {
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'my-client',
+        redirect_uri: 'http://localhost:8080/callback#frag',
+        response_type: 'code',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_request');
+    expect(res.body.error_description).toContain('redirect_uri');
+  });
+
+  it('rejects redirect_uri with userinfo (security)', async () => {
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'my-client',
+        redirect_uri: 'http://user:pass@localhost:8080/callback',
+        response_type: 'code',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_request');
+    expect(res.body.error_description).toContain('redirect_uri');
   });
 
   it('returns 404 when proxyAuthEndpoint is disabled', async () => {
@@ -319,7 +400,7 @@ describe('GET /authorize (CIMD integration)', () => {
     mockCimdFetcher.mockClear();
   });
 
-  it('substitutes CIMD client_id and redirects to upstream', async () => {
+  it('substitutes CIMD client_id and redirects to upstream with rewritten redirect_uri', async () => {
     const app = makeAppWithCimd();
 
     const res = await request(app)
@@ -335,8 +416,9 @@ describe('GET /authorize (CIMD integration)', () => {
     expect(res.status).toBe(302);
     const location = new URL(res.headers.location);
     expect(location.searchParams.get('client_id')).toBe('cursor-sso-client');
-    expect(location.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:8080/callback');
-    expect(location.searchParams.get('state')).toBe('xyz');
+    expect(location.searchParams.get('redirect_uri')).toBe('http://localhost:3000/authorize/callback');
+    // state is wrapped in signed blob
+    expect(location.searchParams.get('state')).not.toBe('xyz');
   });
 
   it('passes through non-CIMD client_id unchanged', async () => {
@@ -429,6 +511,7 @@ describe('GET /authorize (CIMD integration)', () => {
       .get('/authorize')
       .query({
         client_id: 'https://cursor.com/oauth-client.json',
+        redirect_uri: 'http://localhost:8080/callback',
         response_type: 'code',
       });
 
@@ -486,7 +569,7 @@ describe('Global JSON error handler', () => {
 
     const res = await request(app)
       .get('/authorize')
-      .query({ client_id: 'my-client', response_type: 'code' });
+      .query({ client_id: 'my-client', redirect_uri: 'http://localhost:8080/callback', response_type: 'code' });
 
     expect(res.status).toBe(500);
     expect(res.headers['content-type']).toMatch(/json/);
@@ -505,7 +588,7 @@ describe('Global JSON error handler', () => {
 
     const res = await request(app)
       .get('/authorize')
-      .query({ client_id: 'my-client', response_type: 'code' });
+      .query({ client_id: 'my-client', redirect_uri: 'http://localhost:8080/callback', response_type: 'code' });
 
     expect(res.status).toBe(500);
     expect(JSON.stringify(res.body)).not.toContain('SECRET_DB_PASSWORD');

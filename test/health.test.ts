@@ -23,6 +23,8 @@ const CONFIG: AppConfig = {
   cimdEnabled: false,
   metricsEnabled: false,
   shutdownTimeoutSeconds: 30,
+  authStateTtlSeconds: 1800,
+  allowedRedirectUris: [],
 };
 
 function makeApp() {

@@ -8,22 +8,28 @@
 [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/velias/f550f0ffe68a574a690032088359fef3/raw/mcp-auth-adapter-coverage.json)](https://github.com/velias/mcp-auth-adapter/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/velias/mcp-auth-adapter/badge)](https://securityscorecards.dev/viewer/?uri=github.com/velias/mcp-auth-adapter)
 
-An OAuth/OIDC authentication adapter for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) clients. It sits in front of any OAuth 2.0 / OIDC upstream IdP that serves standard discovery metadata -- such as Keycloak, Auth0, Okta, Azure AD, Google Identity, or any provider serving standard OAuth 2.0 / OIDC discovery metadata -- and provides functionality required by the [MCP Authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) for the most common MCP clients (Claude Code/Desktop, Cursor IDE, ChatGPT, Gemini CLI, VS Code, ...) and [their known problematic behaviours](#known-mcp-client-behaviors).
+An OAuth/OIDC authentication adapter for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) clients. It sits in front of any OAuth 2.0 / OIDC upstream IdP - such as Keycloak, Auth0, Okta, Azure AD, Google Identity, or any provider serving standard OAuth 2.0 / OIDC discovery metadata - and provides functionality required by the [MCP Authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) for the most common MCP clients (Claude Code/Desktop, Cursor IDE, ChatGPT, Gemini CLI, VS Code, ...) and [their known problematic behaviours](#known-mcp-client-behaviors).
 
-MCP servers [announce this adapter as their authorization server](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#authorization-server-discovery). MCP clients discover it via `.well-known` and interact with its endpoints. **Authentication itself, token issuing, and token exchanges are all performed by the upstream IdP** -- this adapter is only a very thin, transparent, stateless facade.
+MCP servers [announce this adapter as their authorization server](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#authorization-server-discovery). MCP clients discover it via `.well-known` and interact with its endpoints. **Authentication itself and token issuing are performed by the upstream IdP** - this adapter is only a very thin, transparent, stateless facade.
+
+### MCP Spec Compatibility
+
+- **MCP Authorization Specification 2025-11-25** — v1.0 fully compatible
+- **MCP Authorization Specification 2026-07-28 RC** — v2.0 fully compatible (adds mandatory RFC 9207 `iss` parameter validation)
 
 ### Features
 
-- **Well-known discovery** (`/.well-known/openid-configuration`, `/.well-known/oauth-authorization-server`) -- filtered, MCP-focused view of the upstream IdP metadata with injected adapter endpoints and tailored configurations.
-- **Open Dynamic Client Registration** (`POST /register`, optional) -- returns a pre-configured fixed `client_id` for all registering MCP clients per [RFC 7591](https://rfc-editor.org/rfc/rfc7591).
-- **Scope filtering during authentication** (`GET /authorize`, optional) -- intercepts authorization requests to modify scopes and redirect to the upstream IdP
-  **CIMD adapter** (`GET /authorize` + `POST /token`, EXPERIMENTAL, optional) -- accepts [Client ID Metadata Document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) style `client_id` URLs, validates metadata documents, and maps them to pre-configured fixed upstream IdP client_ids. See [CIMD Adapter](#cimd-adapter-experimental).
+- **Well-known discovery** (`/.well-known/openid-configuration`, `/.well-known/oauth-authorization-server`) - filtered, MCP-focused view of the upstream IdP metadata with injected adapter endpoints and tailored configurations.
+- **Open Dynamic Client Registration** (`POST /register`, optional) - returns a pre-configured fixed `client_id` for all registering MCP clients per [RFC 7591](https://rfc-editor.org/rfc/rfc7591).
+- **Scope filtering during authentication** (`GET /authorize`, optional) - intercepts authorization requests to modify scopes and redirect to the upstream IdP.
+- **RFC 9207 `iss` parameter validation** - mandatory authorization response issuer verification, which prevents OAuth mix-up attacks per the MCP Auth Spec (2026-07-28 RC). The adapter intercepts upstream authorization responses and rewrites the `iss` parameter so MCP clients see a consistent issuer matching the adapter's well-known metadata. See [RFC 9207 iss parameter validation](#rfc-9207-iss-parameter-validation).
+- **CIMD adapter** (`GET /authorize` + `POST /token`, EXPERIMENTAL, optional) - accepts [Client ID Metadata Document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) style `client_id` URLs, validates metadata documents, and maps them to pre-configured fixed upstream IdP client_ids. See [CIMD Adapter](#cimd-adapter-experimental).
 
 See [Flow Diagrams](#flow-diagrams) to understand functionality better.
 
 ## Container Image
 
-Pre-built container images are published to GitHub Container Registry on every release. This is the recommended way to deploy in production -- no Node.js installation required.
+Pre-built container images are published to GitHub Container Registry on every release. This is the recommended way to deploy in production - no Node.js installation required.
 
 **Prerequisites:** [Docker](https://docs.docker.com/get-docker/) or [Podman](https://podman.io/docs/installation)
 
@@ -49,10 +55,10 @@ podman run -d -p 3000:3000 --env-file .env ghcr.io/velias/mcp-auth-adapter:lates
 ### Available tags
 
 Each release `vX.Y.Z` produces the following image tags:
-- `X.Y.Z` -- exact version (recommended for production)
-- `X.Y` -- latest patch within a minor version
-- `X` -- latest minor within a major version
-- `latest` -- most recent release
+- `X.Y.Z` - exact version (recommended for production)
+- `X.Y` - latest patch within a minor version
+- `X` - latest minor within a major version
+- `latest` - most recent release
 
 To build the image locally from source, see [CONTRIBUTING.md](CONTRIBUTING.md#running-with-docker--podman).
 
@@ -83,6 +89,11 @@ Environment variables are used. All variables are prefixed with `MCP_`. A `.env`
 | `MCP_SHUTDOWN_TIMEOUT_SECONDS` | No | `30` | Maximum seconds to wait for in-flight requests to drain after `SIGTERM`/`SIGINT` before force-exiting. |
 | | | | **Dynamic Client Registration** |
 | `MCP_PROXY_DCR_CLIENT_ID` | No | -- | Fixed `client_id` returned by `POST /register`. Setting this enables the DCR proxy. Must be pre-registered at the upstream IdP as a public client. If omitted, the upstream IdP's registration endpoint is announced directly. |
+| | | | **RFC 9207 iss interception** (auto-enables `/authorize` + `/token` proxy) |
+| `MCP_PROXY_AUTH_STATE_SECRET` | Conditional | -- | Hex-encoded HMAC secret for signing state blobs (min 32 bytes = 64 hex chars). **Required when the `/authorize` proxy is active** (scope filtering, CIMD, or standalone). Generate with `openssl rand -hex 32`. Must be identical across all pods. |
+| `MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS` | No | -- | Previous HMAC secret for zero-downtime key rotation (same format). Set to the old key during rotation; remove after TTL has elapsed. |
+| `MCP_PROXY_AUTH_STATE_TTL_MINUTES` | No | `30` | How long (minutes) the signed state blob remains valid. Must cover full user interaction at the upstream IdP (login + registration + MFA + consent). |
+| `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` | Conditional | -- | Comma-separated allowed redirect URI patterns. Trailing `*` = prefix match, no `*` = exact match. **Required when `/authorize` proxy is active** (unless CIMD-only). See [known MCP client patterns](#known-mcp-client-redirect-uri-patterns) for common values. |
 | | | | **Scope filtering** (auto-enables `/authorize` proxy) |
 | `MCP_PROXY_AUTH_SCOPES_REMOVED` | No | -- | Comma-separated scopes to strip from `/authorize` requests (e.g. `offline_access`). Ignored if `MCP_PROXY_AUTH_SCOPES_PRESERVED` is also set. |
 | `MCP_PROXY_AUTH_SCOPES_PRESERVED` | No | -- | Comma-separated scopes to keep in `/authorize` requests; all others are stripped. Takes precedence over `MCP_PROXY_AUTH_SCOPES_REMOVED`. |
@@ -103,7 +114,7 @@ MCP clients interact with OAuth/OIDC in ways that can cause issues with upstream
 
 ### Clients request all announced scopes
 
-Many MCP clients (notably Claude Code, Claude Desktop, Cursor IDE) read `scopes_supported` from the well-known document and include **all** of them in the `/authorize` request. When an upstream IdP announces dozens of scopes (e.g. Keycloak exposes internal scopes like `profile`, `email`, `roles`, `web-origins`, etc.), the authorization request balloons with scopes the MCP server doesn't need — confusing users on the consent screen or causing outright rejection by the upstream IdP if some scopes require pre-approval.
+MCP clients read `scopes_supported` from the well-known document and include **all** of them in the `/authorize` request. It is required by the MCP Specification if no scope is explicitly requested by the MCP Server. When an upstream IdP announces dozens of scopes, the authorization request balloons with scopes the MCP server doesn't need — confusing users on the consent screen or causing outright rejection by the upstream IdP if some scopes require pre-approval.
 
 **Mitigation 1 — control what's announced:**
 
@@ -130,39 +141,49 @@ This catches scopes regardless of whether the client added them from the discove
 
 ### Clients always request `offline_access` scope
 
-Some MCP clients (e.g. Claude Code, Cursor IDE) unconditionally add `offline_access` to every authorization request to be sure they obtain refresh tokens, as some IdPs provide it only under this scope. This may be problematic when this scope has different consequence in your IdP:
-
-- The upstream IdP requires explicit admin consent or client-level configuration to issue offline tokens
-- The IdP rejects the entire authorization request when `offline_access` is not an allowed scope for the client
-- Organization policy restricts long-lived refresh tokens for security reasons
-
-**Mitigation — strip the scope at the proxy:**
-
-```bash
-# Remove offline_access before forwarding to the upstream IdP
-MCP_PROXY_AUTH_SCOPES_REMOVED=offline_access
-```
-
-Or use the allowlist approach to be more restrictive:
-
-```bash
-# Only forward these specific scopes, drop everything else
-MCP_PROXY_AUTH_SCOPES_PRESERVED=openid,api.read,api.write
-```
+Some MCP clients (e.g. Claude Code, Cursor IDE) unconditionally add `offline_access` to every authorization request to obtain refresh tokens. This can be problematic if the upstream IdP requires admin consent for offline tokens, rejects unknown scopes, or your policy restricts long-lived refresh tokens. Use `MCP_PROXY_AUTH_SCOPES_REMOVED=offline_access` to strip it before forwarding.
 
 ### Combining both controls
 
-For a typical deployment where greedy clients and `offline_access` are both issues:
+`MCP_WELL_KNOWN_SCOPES_SUPPORTED` controls the **demand side** (what clients see and request), while `MCP_PROXY_AUTH_SCOPES_REMOVED` / `MCP_PROXY_AUTH_SCOPES_PRESERVED` controls the **supply side** (what actually reaches the upstream IdP). Using both provides defense in depth.
+
+## RFC 9207 iss parameter validation
+
+The MCP Auth Spec (2026-07-28 RC) mandates `iss` parameter validation in authorization responses per [RFC 9207](https://www.rfc-editor.org/rfc/rfc9207). Without authorization callback interception, MCP clients would reject the upstream IdP's `iss` value because it doesn't match the adapter's well-known `issuer`.
+
+This adapter solves the problem in v2.0 by intercepting the authorization response:
+
+1. **`GET /authorize`** — validates the client's `redirect_uri` against configured patterns, wraps the original `redirect_uri` and `state` into an HMAC-signed state blob, replaces `redirect_uri` with the adapter's callback URL, and redirects to the upstream IdP with own state.
+2. **`GET /authorize/callback`** — receives the upstream IdP's redirect, verifies the state blob (HMAC + expiry), validates the upstream `iss` parameter, then redirects to the original MCP client `redirect_uri` with the adapter's `iss` value.
+3. **`POST /token`** — proxies token requests, validating and rewriting `redirect_uri` to maintain consistency with what the upstream IdP expects by the OAuth specification.
+
+**Minimal configuration:**
 
 ```bash
-# Announce only relevant scopes (controls what clients ask for)
-MCP_WELL_KNOWN_SCOPES_SUPPORTED=openid,api.read,api.write
-
-# Strip offline_access even if a client adds it explicitly
-MCP_PROXY_AUTH_SCOPES_REMOVED=offline_access
+MCP_BASE_URL=https://mcp-auth.example.com
+MCP_UPSTREAM_SSO_URL=https://sso.example.com/auth/realms/external
+MCP_PROXY_AUTH_STATE_SECRET=$(openssl rand -hex 32)
+MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS=http://localhost:*,http://127.0.0.1:*
 ```
 
-`MCP_WELL_KNOWN_SCOPES_SUPPORTED` controls the **demand side** (what clients see and request), while `MCP_PROXY_AUTH_SCOPES_REMOVED` / `MCP_PROXY_AUTH_SCOPES_PRESERVED` controls the **supply side** (what actually reaches the upstream IdP). Using both provides defense in depth.
+**Key rotation** — to rotate the HMAC secret without downtime:
+
+1. Set `MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS` to the current key
+2. Set `MCP_PROXY_AUTH_STATE_SECRET` to the new key
+3. Wait at least `MCP_PROXY_AUTH_STATE_TTL_MINUTES` (default 30 min)
+4. Remove `MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS`
+
+**Security properties:**
+
+- Signed state prevents forging the original `redirect_uri`; `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` validates destinations before the flow begins
+- Client's original `state` is preserved inside the blob — tampering is detected via HMAC (`crypto.timingSafeEqual`)
+- Configurable TTL prevents reuse of stale authorization responses
+- Two-tier upstream `iss` validation — strict when upstream advertises RFC 9207 support, defensive (validate if present) when it doesn't
+- Callback only forwards a whitelist of OAuth-defined parameters — arbitrary upstream parameters cannot reach the client
+- `redirect_uri` values with fragments, userinfo, or control characters are rejected
+- Callback sets `Cache-Control: no-store` and `Referrer-Policy: no-referrer`
+- Authorization code is never logged (only `code_present: true/false`)
+- State blob is signed, not encrypted — contains redirect_uri and original state (both non-secret); confidentiality relies on TLS and short TTL
 
 ## Open DCR and its Security Limitations
 
@@ -173,8 +194,8 @@ The Open DCR endpoint returns a fixed public `client_id` (`token_endpoint_auth_m
 But as many MCP Clients are local apps, any local application can obtain this `client_id` and start an OAuth flow. 
 IdP do not know who is asking for the `client_id`. Two emerging standards address this:
 
-- **DCR with Software Statement Assertion (SSA)** -- cryptographically proves client identity via signed JWTs ([RFC 7591 §2.3](https://rfc-editor.org/rfc/rfc7591#section-2.3)). No major MCP client currently includes Software Statements in DCR requests.
-- **Client ID Metadata Documents (CIMD)** -- the `client_id` is an HTTPS URL pointing to a metadata document. Default mechanism in the [MCP Auth Spec (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#client-id-metadata-documents), not yet universally adopted. **This adapter includes experimental CIMD support** -- see [CIMD Adapter](#cimd-adapter-experimental).
+- **DCR with Software Statement Assertion (SSA)** - cryptographically proves client identity via signed JWTs ([RFC 7591 §2.3](https://rfc-editor.org/rfc/rfc7591#section-2.3)). No major MCP client currently includes Software Statements in DCR requests.
+- **Client ID Metadata Documents (CIMD)** - the `client_id` is an HTTPS URL pointing to a metadata document. Default mechanism in the [MCP Auth Spec (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#client-id-metadata-documents), not yet universally adopted. **This adapter includes experimental CIMD support** - see [CIMD Adapter](#cimd-adapter-experimental).
 
 Until "DCR with SSA" or CIMD is widely supported, user consent during login at the upstream IdP is the last line of defense. This is an [accepted limitation of the MCP auth ecosystem](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#localhost-redirect-uri-risks).
 
@@ -185,13 +206,13 @@ Until "DCR with SSA" or CIMD is widely supported, user consent during login at t
 When configured, the adapter bridges MCP clients using CIMD-style `client_id` (HTTPS URLs) to upstream IdPs that don't support CIMD natively:
 
 1. Validates CIMD URL syntax per the spec (Section 3)
-2. Checks if the client is allowed in the configuration (map lookup + optional default) -- rejects unknown clients before any I/O
+2. Checks if the client is allowed in the configuration (map lookup + optional default) - rejects unknown clients before any I/O
 3. Fetches and validates the CIMD metadata document (with SSRF protections and caching)
 4. Validates `redirect_uri` against the document's `redirect_uris` (exact match per RFC 9700)
 5. Substitutes the CIMD `client_id` with a pre-registered upstream IdP client_id
 6. Forwards the request to the upstream IdP
 
-See [flow diagram](#cimd-experimantal-and-scopes-filtering).
+See [flow diagram](#cimd-experimental-with-iss-interception-and-scopes-filtering).
 
 **Configuration example:**
 ```bash
@@ -204,13 +225,13 @@ MCP_PROXY_CIMD_DEFAULT_CLIENT_ID=generic-mcp-client
 - Rewrite `token_endpoint` to this adapter's `/token` proxy
 - Ensure `token_endpoint_auth_methods_supported` includes `"none"`
 
-**Upstream IdP client registration**: Each upstream client_id in `MCP_PROXY_CIMD_MAP` must be pre-registered at the upstream IdP as a public client (`token_endpoint_auth_method: none`). Redirect URI patterns must match what the corresponding MCP clients use (typically `http://127.0.0.1:*` or `http://localhost:*`).
+**Upstream IdP client registration**: Each upstream client_id in `MCP_PROXY_CIMD_MAP` must be pre-registered at the upstream IdP as a public client (`token_endpoint_auth_method: none`). For redirect URI configuration, see [Redirect URIs at the upstream IdP](#redirect-uris-at-the-upstream-idp).
 
-**Why configure separate upstream clients per MCP client?** While a single default upstream client_id works, configuring dedicated upstream clients per CIMD URL enables **distinct user consent screens** at the upstream IdP. The consent screen can display the specific application name (e.g. "Cursor IDE" vs "Claude Code"), giving users visibility into which MCP client is requesting access. This is the primary security benefit of per-client mapping -- users can make informed consent decisions and administrators can revoke access per MCP client independently.
+**Why configure separate upstream clients per MCP client?** Dedicated upstream clients per CIMD URL enable distinct consent screens (e.g. "Cursor IDE" vs "Claude Code"), letting users make informed decisions and administrators revoke access per MCP client independently.
 
 ### CIMD Security Considerations
 
-- **Token `azp` mismatch**: Issued tokens contain the **upstream** client_id in the `azp` claim, not the CIMD URL the MCP client sent. This works only if MCP client validates `azp` against its own `client_id`. If a future client does, tokens would appear invalid -- an inherent limitation of client_id substitution that requires native IdP CIMD support to resolve.
+- **Token `azp` mismatch**: Issued tokens contain the **upstream** client_id in the `azp` claim, not the CIMD URL the MCP client sent. This works only if MCP client validates `azp` against its own `client_id`. If a future client does, tokens would appear invalid - an inherent limitation of client_id substitution that requires native IdP CIMD support to resolve.
 - **SSRF protection**: DNS resolution checks (rejects private/loopback/link-local IPs including IPv6-mapped IPv4), no redirect following, 5KB response size limit, 5-second timeout.
 - **DNS rebinding caveat**: A TOCTOU gap exists between the DNS check and the actual fetch connection. The cache mitigates this by limiting repeated fetches.
 - **Cache isolation**: Configured (mapped) clients are pinned in cache and cannot be evicted by an attacker flooding unknown CIMD URLs. Unpinned cache is capped at 1000 entries.
@@ -219,18 +240,18 @@ MCP_PROXY_CIMD_DEFAULT_CLIENT_ID=generic-mcp-client
 
 ## Token Issuer Validation
 
-This adapter rewrites `issuer` in well-known metadata to its own `MCP_BASE_URL` (RFC 8414 §3.3), but tokens are issued by the **upstream IdP** -- their `iss` claim contains the upstream IdP URL.
+> **Note**: The RFC 9207 `iss` parameter in authorization responses is handled correctly (the adapter rewrites it). The caveat below applies to JWT `iss` claims inside **tokens**, which is a separate concern.
+
+This adapter rewrites `issuer` in well-known metadata to its own `MCP_BASE_URL`, but tokens are issued by the **upstream IdP** — their JWT `iss` claim contains the upstream IdP URL.
 
 **MCP servers and clients must not validate the access token JWT `iss` claim against this adapter's discovery `issuer`.**
 
-Two correct approaches:
+In practice this is not a problem. Most OAuth libraries validate tokens via JWKS signature verification, not by comparing the JWT `iss` against discovery metadata. MCP servers typically treat access tokens as opaque or verify them via introspection. All major MCP clients we tested work correctly.
 
-1. **Skip `iss` validation (recommended)** -- JWKS signature verification is sufficient. A valid signature against the adapter's `jwks_uri` (which points to the upstream IdP's JWKS) cryptographically proves the token's origin.
-2. **Validate `iss` against the upstream IdP URL** -- configure the MCP server with `MCP_UPSTREAM_SSO_URL`, not `MCP_BASE_URL`.
+If explicit token validation is needed:
 
-This separation exists because the adapter is an lightweight authorization metadata facade, not a token issuer. It controls discovery, client registration, and authorization redirects, but all token operations remain at the upstream IdP.
-
-All the major MCP clients we tested today are OK.
+1. **JWKS signature verification (recommended)** — the adapter's `jwks_uri` points to the upstream IdP's JWKS, so signature verification cryptographically proves the token's origin.
+2. **Validate `iss` against the upstream IdP URL** — configure the MCP server with `MCP_UPSTREAM_SSO_URL`, not `MCP_BASE_URL`.
 
 ## Deployment Notes
 
@@ -243,10 +264,31 @@ Every `client_id` used by this adapter (both the DCR client and each CIMD-mapped
 | Client type | Public | MCP clients cannot hold secrets (`token_endpoint_auth_method: none`) |
 | Consent | **Enabled (required)** | User consent is the primary security control -- it lets users see which application is requesting access and decide whether to grant it |
 | Standard flow | Enabled | Authorization code flow is the only flow used by MCP clients |
-| Valid redirect URIs | See below | Must cover all MCP clients that will use this `client_id` |
-| Allowed scopes | | Must cover all the scopes required by MCP servers using this MCP authentication adapter, mainly the one requiring pre-approval |
+| Allowed scopes | | Must cover all the scopes required by MCP servers using this adapter, mainly those requiring pre-approval |
 
-**Redirect URI patterns** to cover the most common MCP clients -- non-authoritative hints, please verify at the deployment time:
+#### Redirect URIs at the upstream IdP
+
+With iss interception active (v2.0+, recommended), the adapter intercepts all authorization responses. The upstream IdP only ever sees a single redirect URI — the adapter's callback. This greatly simplifies IdP configuration.
+
+**What to register at the upstream IdP:**
+
+| Deployment mode | Allowed redirect URI at upstream IdP |
+|---|---|
+| Any mode with iss interception (v2.0+) | `{MCP_BASE_URL}/authorize/callback` (single value, applies to all client_ids) |
+| Legacy (pre-v2.0, no iss interception) | All MCP client patterns from the [table below](#known-mcp-client-redirect-uri-patterns) |
+
+**How MCP client redirect URIs are validated (v2.0+):**
+
+The adapter validates the MCP client's `redirect_uri` before the user ever reaches the upstream IdP:
+
+| Client type | Validated against | Configuration |
+|---|---|---|
+| DCR clients (non-CIMD) | `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` patterns | Set to [known MCP client patterns](#known-mcp-client-redirect-uri-patterns) below |
+| CIMD clients | `redirect_uris` field in the client's CIMD metadata document | Automatic, no adapter config needed |
+
+#### Known MCP client redirect URI patterns
+
+Common MCP client redirect URIs — non-authoritative hints, please verify at deployment time:
 
 | Pattern | MCP Clients |
 |---|---|
@@ -262,88 +304,60 @@ Every `client_id` used by this adapter (both the DCR client and each CIMD-mapped
 | `warp://mcp/*` | Warp |
 | `vscode://saoudrizwan.claude-dev/*` | Cline |
 
-Note: ephemeral ports are typically used on localhost/127.0.0.1, so your IdP has to allow any port here. And any possible path also.
+Note: MCP clients on localhost/127.0.0.1 use ephemeral ports and varying paths, so your IdP must allow any port and any path for these origins (i.e. use wildcard or prefix matching).
 
-For the **DCR client** (`MCP_PROXY_DCR_CLIENT_ID`), configure all patterns above to support all MCP clients with a single shared client.
+### Horizontal Scaling / Multi-Pod
 
-For **CIMD-mapped clients** (`MCP_PROXY_CIMD_MAP`), you can be more restrictive -- each upstream client only needs the redirect URI patterns for the specific MCP client it maps to. This is one of the advantages of per-client mapping: tighter redirect URI scoping alongside distinct consent screens.
+The adapter is fully stateless - the only shared secret is `MCP_PROXY_AUTH_STATE_SECRET` (and optionally `MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS`), which must be identical across all replicas. 
+
+Authorization State blob verification uses absolute timestamps, so pod clocks must be reasonably synchronized (NTP is sufficient; a few seconds of drift is tolerable within the TTL window).
 
 ### TLS
 
-[RFC 7591 §5](https://rfc-editor.org/rfc/rfc7591#section-5) requires TLS for the DCR registration endpoint. In production, TLS should be terminated at the reverse proxy / load balancer in front of this application.
+[RFC 7591 §5](https://rfc-editor.org/rfc/rfc7591#section-5) requires TLS for the DCR registration endpoint. With iss interception enabled, authorization codes transit through the adapter (in the `/authorize/callback` redirect) - https is critical to prevent codes from being exposed on the wire. In production, TLS should be terminated at the reverse proxy / load balancer in front of this application and
+`MCP_BASE_URL` should be always `https://`!
 
 ### Caching
 
-Well-known endpoints return `Cache-Control: public, max-age=<seconds>` (half of `MCP_WELL_KNOWN_REFRESH_MINUTES`). DCR returns `Cache-Control: no-store`. CDNs (e.g. Akamai) must honor origin cache headers to ensure clients receive up-to-date discovery documents.
+Well-known endpoints return `Cache-Control: public, max-age=<seconds>` (half of `MCP_WELL_KNOWN_REFRESH_MINUTES`). DCR, `/authorize/callback`, and `/token` return `Cache-Control: no-store`. CDNs must honor origin cache headers to ensure clients receive up-to-date discovery documents and never cache authorization responses or tokens.
 
 ### Rate Limiting
 
-[RFC 7591 §3](https://rfc-editor.org/rfc/rfc7591#section-3) recommends rate limiting for open DCR endpoints. This adapter does not implement app-level rate limiting -- it should be handled by an external WAF or reverse proxy (e.g. Akamai, Cloudflare, nginx).
+Publicly accessible endpoints that should be rate-limited: `POST /register` (open DCR, [RFC 7591 §3](https://rfc-editor.org/rfc/rfc7591#section-3)), `GET /authorize`, `GET /authorize/callback`, and `POST /token`. This adapter does not implement app-level rate limiting - use an external WAF or reverse proxy (e.g. nginx, Cloudflare, Akamai).
 
 ### CORS
 
-This adapter intentionally does **not** set CORS headers. All endpoints are designed for server-to-server or redirect-based flows (well-known discovery, DCR, authorize redirects, token proxy) -- none require browser `XMLHttpRequest`/`fetch` access from a different origin. The absence of CORS headers also provides a CSRF defense layer for the DCR endpoint.
+This adapter intentionally does **not** set CORS headers. All endpoints are designed for server-to-server or redirect-based flows — none require browser `XMLHttpRequest`/`fetch` access from a different origin. The absence of CORS headers also provides a CSRF defense layer for the DCR endpoint. If your deployment requires browser-based access, configure CORS at the reverse proxy layer.
 
-This means **browser-based MCP clients** (single-page apps that call these endpoints directly via JavaScript) will not work out of the box. If your deployment requires browser-based access, you have two options:
+### Exposed Endpoints
 
-1. **Reverse proxy** -- configure CORS at the reverse proxy layer (e.g. nginx, Akamai, Cloudflare). Recommended for production deployments that already have a reverse proxy.
-2. **Built-in CORS** (not yet implemented) -- a config option to enable CORS directly in the adapter for simpler deployments, development, and testing. Create feature request please if you need it.
+The adapter serves the following paths. Your reverse proxy (Ingress, nginx, HAProxy, etc.) must route public paths to the adapter and block internal paths from external access:
 
-### Access Logging
+| Path | Exposure | Notes |
+|---|---|---|
+| `/.well-known/openid-configuration` | Public | Discovery |
+| `/.well-known/oauth-authorization-server` | Public | Discovery (RFC 8414) |
+| `/register` | Public | DCR (if enabled) |
+| `/authorize` | Public | Authorization proxy |
+| `/authorize/callback` | Public | ISS interception callback (v2.0+) |
+| `/token` | Public | Token proxy (v2.0+) |
+| `/health/live`, `/health/ready` | **Internal only** | Kubernetes probes |
+| `/metrics` | **Internal only** | Prometheus scraping (if enabled) |
 
-This adapter does **not** produce HTTP access logs (per-request log lines with method, path, status, latency). Application-level logging covers lifecycle events, errors, and debug detail (when `MCP_DEBUG=true`), and the `/metrics` endpoint provides aggregate request counts and latency histograms -- but individual request traces are not logged.
-
-For per-request access logs, rely on the reverse proxy or load balancer in front of this adapter (e.g. nginx, HAProxy, Envoy, Istio sidecar, or cloud load balancer access logs). This is the standard pattern for microservices and avoids duplicating logging that the infrastructure layer already provides.
-
-### Internal Endpoints
-
-`/health/*` and `/metrics` are unauthenticated operational endpoints intended for cluster-internal use only (Kubernetes probes, Prometheus scrape via ServiceMonitor). They should **not** be exposed to untrusted networks -- keep them behind the cluster-internal Service, not on public Routes/Ingress. A reverse proxy or Ingress should block these paths from external access.
-
-- `/metrics` exposes operational data (request counts, latencies, error rates, upstream health status). No sensitive data (tokens, client_ids, user data) is included -- labels contain only HTTP method, route pattern, and status code. `Cache-Control: no-store` is set.
-- `/health/ready` reveals shutdown state, which could be useful for reconnaissance.
-- `/metrics` returns Prometheus text exposition format, compatible with:
-  - **OpenShift** built-in monitoring (ServiceMonitor)
-  - **Standalone Prometheus**
-  - **OpenTelemetry Collectors** via the [Prometheus receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/prometheusreceiver) -- for OTel-based pipelines, no application-side OTLP push is needed; the OTel Collector scrapes `/metrics` and forwards to any backend.
-
-**Kubernetes annotations** for Prometheus auto-discovery:
-
-```yaml
-metadata:
-  annotations:
-    prometheus.io/scrape: "true"
-    prometheus.io/port: "3000"
-    prometheus.io/path: "/metrics"
-```
-
-**ServiceMonitor** for OpenShift / Prometheus Operator:
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: mcp-auth-adapter
-spec:
-  selector:
-    matchLabels:
-      app: mcp-auth-adapter
-  endpoints:
-    - port: http
-      path: /metrics
-```
+Internal endpoints are unauthenticated — keep them behind cluster-internal networking, not on public ingress. They expose only operational data (no tokens, client_ids, or user data).
 
 ### Upstream IdP Compatibility
 
-On first startup (and after every `MCP_UPSTREAM_SSO_URL` change), review the adapter's log output for warnings prefixed with `Upstream IdP compatibility:`. These indicate the upstream IdP may not fully support MCP authorization requirements -- for example, missing `authorization_endpoint`, missing `token_endpoint`, or missing PKCE support (`code_challenge_methods_supported` without `S256`). The adapter injects safe defaults where possible, but these warnings should be investigated to ensure the upstream IdP is correctly configured for MCP flows.
+Review startup logs for warnings prefixed with `Upstream IdP compatibility:` — these indicate the upstream IdP may not fully support MCP requirements. See [Upstream Well-Known Handling](#upstream-well-known-handling) for details on fallback behavior and compatibility validation.
 
 ## Health Probes
 
 | Endpoint | Purpose | Response |
 |---|---|---|
-| `GET /health/live` | **Liveness** -- process is running, HTTP listener responsive | `200` always |
-| `GET /health/ready` | **Readiness** -- application initialized, ready to serve | `200` normally, `503` during graceful shutdown |
+| `GET /health/live` | **Liveness** - process is running, HTTP listener responsive | `200` always |
+| `GET /health/ready` | **Readiness** - application initialized, ready to serve | `200` normally, `503` during graceful shutdown |
 
-Both are mounted before body-parsing middleware. Neither checks upstream IdP availability -- the adapter is functional even with fallback defaults.
+Both are mounted before body-parsing middleware. Neither checks upstream IdP availability - the adapter is functional even with fallback defaults.
 
 ### Graceful Shutdown
 
@@ -354,6 +368,8 @@ On `SIGTERM` or `SIGINT` the adapter:
 4. Clears the periodic well-known refresh timer.
 
 ## Logging
+
+### Application logs
 
 The adapter emits structured logs to **stdout** (`info`, `debug`) and **stderr** (`warn`, `error`) in a machine-parseable key=value format:
 
@@ -372,9 +388,18 @@ All levels except `debug` are always active. Set `MCP_DEBUG=true` to enable verb
 
 No log aggregation agent or format is assumed — the structured key=value lines are compatible with most log collectors (Fluentd, Promtail, Vector, CloudWatch, etc.) and can be parsed with simple regex or key=value splitters.
 
+### Access logs
+
+Classic HTTP access logs are not emitted — use your reverse proxy or load balancer for per-request access logging. For debugging, `MCP_DEBUG=true` provides per-request structured logs; `/metrics` provides aggregate counts and latency histograms.
+
 ## Metrics / Observability
 
 The adapter exposes a `GET /metrics` endpoint in [Prometheus text exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/) when `MCP_METRICS_ENABLED=true` (default). Set `MCP_METRICS_ENABLED=false` to disable entirely -- no endpoint, no middleware, no-op instrumentation stubs, zero overhead.
+
+Compatible with:
+- **OpenShift** built-in monitoring (ServiceMonitor)
+- **Standalone Prometheus**
+- **OpenTelemetry Collectors** via the [Prometheus receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/prometheusreceiver) -- no application-side OTLP push needed; the OTel Collector scrapes `/metrics` and forwards to any backend
 
 ### Exposed metrics
 
@@ -388,7 +413,7 @@ The adapter exposes a `GET /metrics` endpoint in [Prometheus text exposition for
 | `mcp_auth_cimd_cache_operations_total` | counter | `result` | CIMD cache lookups (`hit` / `miss`); only when CIMD is enabled |
 | `mcp_auth_cimd_cache_evictions_total` | counter | -- | CIMD cache evictions |
 | `mcp_auth_cimd_cache_size` | gauge | -- | Current CIMD cache entry count |
-| `mcp_auth_token_proxy_upstream_duration_seconds` | histogram | -- | Token proxy upstream request duration; only when CIMD is enabled |
+| `mcp_auth_token_proxy_upstream_duration_seconds` | histogram | -- | Token proxy upstream request duration; only when token proxy is active |
 | `mcp_auth_token_proxy_upstream_status_total` | counter | `status` | Token proxy upstream response status codes |
 | `process_uptime_seconds` | gauge | -- | Process uptime |
 | `process_resident_memory_bytes` | gauge | -- | Resident memory size |
@@ -397,11 +422,27 @@ The adapter exposes a `GET /metrics` endpoint in [Prometheus text exposition for
 
 ### Instrumentation scope
 
-Only functional endpoints are instrumented: `/.well-known/*`, `/register`, `/authorize`, `/token`. Health probes (`/health/*`), the `/metrics` endpoint itself, and unmatched paths are **not** tracked -- no noise from operational endpoints or probe traffic.
+Only functional endpoints are instrumented: `/.well-known/*`, `/register`, `/authorize`, `/authorize/callback`, `/token`. Health probes (`/health/*`), the `/metrics` endpoint itself, and unmatched paths are **not** tracked. All label values come from a small, fixed set (HTTP methods, known route patterns, status codes) — no unbounded cardinality growth.
 
-### Memory footprint
+### Scraping configuration
 
-When enabled, the metrics subsystem uses approximately **20--50 KB** of memory. All label values come from a small, fixed set (HTTP method, known route patterns, status codes), so there is no unbounded cardinality growth. When disabled (`MCP_METRICS_ENABLED=false`), the no-op stubs consume effectively zero memory.
+For Prometheus auto-discovery via pod annotations, set `prometheus.io/scrape: "true"`, `prometheus.io/port: "3000"`, `prometheus.io/path: "/metrics"`.
+
+**ServiceMonitor** for OpenShift / Prometheus Operator:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mcp-auth-adapter
+spec:
+  selector:
+    matchLabels:
+      app: mcp-auth-adapter
+  endpoints:
+    - port: http
+      path: /metrics
+```
 
 ## Development
 
@@ -411,7 +452,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, linting, 
 
 The adapter fetches the upstream IdP's discovery document at startup (trying OIDC and RFC 8414 paths) but only exposes a strict whitelist of fields relevant to MCP. See [Well-Known Field Filtering](#well-known-field-filtering) for details.
 
-- **Discovery fallback chain**: The adapter tries `/.well-known/openid-configuration` first, then `/.well-known/oauth-authorization-server` (RFC 8414). If both fail, endpoints are derived from `MCP_UPSTREAM_SSO_URL` using Keycloak URL conventions (e.g. `{issuer}/protocol/openid-connect/auth`). **This last-resort fallback is Keycloak-specific** -- for other IdPs the derived URLs will be incorrect. Capability fields default to safe minimums (e.g. `code_challenge_methods_supported: ["S256"]`).
+- **Discovery fallback chain**: The adapter tries `/.well-known/openid-configuration` first, then `/.well-known/oauth-authorization-server` (RFC 8414). If both fail, endpoints are derived from `MCP_UPSTREAM_SSO_URL` using Keycloak URL conventions (e.g. `{issuer}/protocol/openid-connect/auth`). **This last-resort fallback is Keycloak-specific** - for other IdPs the derived URLs will be incorrect. Capability fields default to safe minimums (e.g. `code_challenge_methods_supported: ["S256"]`).
 - **Flow-level defaults**: When the upstream provides `authorization_endpoint` and `token_endpoint` but omits flow fields, the adapter injects: `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code"]`, `code_challenge_methods_supported: ["S256"]`. Existing upstream values are never overridden.
 - **Periodic refresh**: Re-fetches at the configured interval (default: 60 min). On success, the new document is used immediately. On failure, the previous document is kept.
 - **Compatibility validation**: At startup and on each periodic refresh, the adapter validates the upstream document and logs `Upstream IdP compatibility:` warnings for:
@@ -421,7 +462,7 @@ The adapter fetches the upstream IdP's discovery document at startup (trying OID
 
 ### Well-Known Field Filtering
 
-The adapter only exposes a strict whitelist of upstream fields. New upstream fields are **not** automatically included -- they must be added to `UPSTREAM_WHITELIST_FIELDS` in [`src/routes/well-known.ts`](src/routes/well-known.ts).
+The adapter only exposes a strict whitelist of upstream fields. New upstream fields are **not** automatically included - they must be added to `UPSTREAM_WHITELIST_FIELDS` in [`src/routes/well-known.ts`](src/routes/well-known.ts).
 
 #### Included fields
 
@@ -433,47 +474,43 @@ The adapter only exposes a strict whitelist of upstream fields. New upstream fie
 |---|---|---|
 | `issuer` | Always | Replaced with `MCP_BASE_URL` per RFC 8414 §3.3 |
 | `registration_endpoint` | `MCP_PROXY_DCR_CLIENT_ID` set | Replaced with `{MCP_BASE_URL}/register` |
-| `authorization_endpoint` | Scope filtering or CIMD configured | Replaced with `{MCP_BASE_URL}/authorize` |
+| `authorization_endpoint` | Auth proxy enabled | Replaced with `{MCP_BASE_URL}/authorize` |
 | `token_endpoint_auth_methods_supported` | DCR or CIMD enabled | `"none"` injected if not already present |
-| `token_endpoint` | CIMD enabled | Rewritten to `{MCP_BASE_URL}/token` |
+| `token_endpoint` | Auth proxy enabled | Rewritten to `{MCP_BASE_URL}/token` |
+| `authorization_response_iss_parameter_supported` | Auth proxy enabled | Set to `true` |
 | `client_id_metadata_document_supported` | CIMD enabled | Set to `true` |
 | `scopes_supported` | `MCP_WELL_KNOWN_SCOPES_SUPPORTED` set | Replaced with configured value; omitted if empty |
 | `response_types_supported` | Upstream omits + auth flow present | Defaults to `["code"]` |
 | `grant_types_supported` | Upstream omits + auth flow present | Defaults to `["authorization_code"]` |
 | `code_challenge_methods_supported` | Upstream omits + auth flow present | Defaults to `["S256"]` |
-| `authorization_response_iss_parameter_supported` | Auth proxy enabled | Removed (upstream issuer won't match rewritten issuer) |
 
-#### Excluded fields (by category)
+#### Excluded fields
 
-| Category | Fields | Reason |
-|---|---|---|
-| OIDC session / logout | `end_session_endpoint`, `check_session_iframe`, `frontchannel_logout_*`, `backchannel_logout_*` | MCP clients manage token lifecycles via expiration and revocation, not OIDC logout. |
-| CIBA | `backchannel_authentication_endpoint`, `backchannel_authentication_request_signing_alg_*`, `backchannel_token_delivery_modes_supported` | Not part of MCP flows. |
-| Device flow | `device_authorization_endpoint` | Not a standard MCP flow. |
-| PAR | `pushed_authorization_request_endpoint`, `require_pushed_authorization_requests` | Not standard in MCP. |
-| JAR / JARM | `request_object_*`, `request_parameter_supported`, `request_uri_parameter_supported`, `require_request_uri_registration`, `authorization_signing_alg_*`, `authorization_encryption_*` | Not used by MCP clients. |
-| mTLS | `mtls_endpoint_aliases`, `tls_client_certificate_bound_access_tokens` | Not typical for MCP client flows. |
-| Encryption | `id_token_encryption_*`, `userinfo_signing_alg_*`, `userinfo_encryption_*` | Not consumed by MCP clients. |
-| Server-side auth | `introspection_endpoint_auth_*`, `revocation_endpoint_auth_*` | Server-side concern, not relevant to client discovery. |
-| Misc | `claim_types_supported`, `claims_parameter_supported`, `acr_values_supported`, `prompt_values_supported` | Not needed for standard MCP flows. |
-
-Note: This list is informative only, anything not included in `UPSTREAM_WHITELIST_FIELDS` is automatically excluded.
+Everything not in the whitelist above is automatically excluded — this includes OIDC session/logout, CIBA, device flow, PAR, JAR/JARM, mTLS, encryption, server-side auth endpoints, and misc claims fields. To expose an additional upstream field, add it to `UPSTREAM_WHITELIST_FIELDS` in [`src/routes/well-known.ts`](src/routes/well-known.ts).
 
 ## Flow Diagrams
 
 Detailed interaction between different components when MCP Authentication happens.
 
-### Open DCR and scopes filtering
+### Open DCR with iss interception and scopes filtering
 
-<img src="docs/mcp_auth_adapter_flow_dcr_scopesfiltering.png" alt="Flow diagram with Open DCR and scopes filtering" width="1024">
+<img src="docs/mcp_auth_adapter_flow_dcr_scopesfiltering.png" alt="Flow diagram with Open DCR, RFC 9207 iss interception, and scopes filtering" width="1024">
 
-### CIMD (EXPERIMANTAL) and scopes filtering
+### CIMD (EXPERIMENTAL) with iss interception and scopes filtering
 
-<img src="docs/mcp_auth_adapter_flow_cimd_scopesfiltering.png" alt="Flow diagram with CIMD and scopes filtering" width="1024">
+<img src="docs/mcp_auth_adapter_flow_cimd_scopesfiltering.png" alt="Flow diagram with CIMD, RFC 9207 iss interception, and scopes filtering" width="1024">
 
-## Security review
+## Security
 
-An [OWASP Top 10 security review](docs/owasp-security-review-2026-05-15.md) was performed on 2026-05-15. No critical issues were found. If you discover a security vulnerability, please report it responsibly via [GitHub Security Advisories](https://github.com/velias/mcp-auth-adapter/security/advisories).
+An [OWASP Top 10 security review](docs/owasp-security-review-2026-05-15.md) was performed on 2026-05-15. No critical issues were found.
+
+If you discover a security vulnerability, please report it responsibly via [GitHub Security Advisories](https://github.com/velias/mcp-auth-adapter/security/advisories).
+
+### Known limitations
+
+- **State blob size**: The signed state (containing original redirect_uri + state + expiry + HMAC, base64url-encoded) passes as the OAuth `state` query parameter. Very long client state values or redirect URIs could exceed IdP URL length limits. MCP clients typically use short state values, so this is unlikely to be an issue in practice.
+- **Secret rotation window**: During rotation, if `MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS` is not set, users mid-authentication receive a 400 and must restart the flow.
+- **Clock skew**: State blob TTL verification uses absolute timestamps. Significant clock skew between pods (beyond normal NTP drift) can cause valid blobs to be rejected as expired.
 
 ## Contributing
 

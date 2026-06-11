@@ -94,14 +94,12 @@ export function buildWellKnownDocument(
 
   if (config.proxyAuthEndpoint) {
     doc.authorization_endpoint = `${config.baseUrl}/authorize`;
-    // RFC 9207: upstream would return its own issuer in the authorization
-    // response `iss` parameter, which won't match our rewritten issuer.
-    delete doc.authorization_response_iss_parameter_supported;
+    doc.token_endpoint = `${config.baseUrl}/token`;
+    doc.authorization_response_iss_parameter_supported = true;
   }
 
   if (config.cimdEnabled) {
     doc.client_id_metadata_document_supported = true;
-    doc.token_endpoint = `${config.baseUrl}/token`;
   }
 
   // Both DCR and CIMD expose public clients (token_endpoint_auth_method: "none"),

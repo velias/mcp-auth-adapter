@@ -5,6 +5,9 @@ const REQUIRED_ENV = {
   MCP_UPSTREAM_SSO_URL: 'https://sso.example.com/auth/realms/test',
 };
 
+const VALID_HEX_SECRET = 'a'.repeat(64);
+const VALID_REDIRECT_URIS = 'http://localhost:*';
+
 function withEnv(extra: Record<string, string>, fn: () => void): void {
   const saved: Record<string, string | undefined> = {};
   const allKeys = new Set([...Object.keys(REQUIRED_ENV), ...Object.keys(extra)]);
@@ -219,7 +222,7 @@ describe('loadConfig — scopes env vars', () => {
   });
 
   it('parses authScopesRemoved and enables proxy', () => {
-    withEnv({ MCP_PROXY_AUTH_SCOPES_REMOVED: 'offline_access' }, () => {
+    withEnv({ MCP_PROXY_AUTH_SCOPES_REMOVED: 'offline_access', MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
       const cfg = loadConfig();
       expect(cfg.authScopesRemoved).toEqual(['offline_access']);
       expect(cfg.proxyAuthEndpoint).toBe(true);
@@ -227,7 +230,7 @@ describe('loadConfig — scopes env vars', () => {
   });
 
   it('parses authScopesPreserved and enables proxy', () => {
-    withEnv({ MCP_PROXY_AUTH_SCOPES_PRESERVED: 'openid,profile' }, () => {
+    withEnv({ MCP_PROXY_AUTH_SCOPES_PRESERVED: 'openid,profile', MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
       const cfg = loadConfig();
       expect(cfg.authScopesPreserved).toEqual(['openid', 'profile']);
       expect(cfg.proxyAuthEndpoint).toBe(true);
@@ -268,7 +271,7 @@ describe('loadConfig — DCR client_id', () => {
 describe('loadConfig — CIMD map', () => {
   it('parses valid CIMD map JSON', () => {
     const map = { 'https://example.com/client-metadata': 'upstream-id' };
-    withEnv({ MCP_PROXY_CIMD_MAP: JSON.stringify(map) }, () => {
+    withEnv({ MCP_PROXY_CIMD_MAP: JSON.stringify(map), MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET }, () => {
       const cfg = loadConfig();
       expect(cfg.cimdMap).toEqual(map);
       expect(cfg.cimdEnabled).toBe(true);
@@ -325,7 +328,7 @@ describe('loadConfig — CIMD map', () => {
 // ---------------------------------------------------------------------------
 describe('loadConfig — CIMD default & cache', () => {
   it('enables CIMD with only default client_id', () => {
-    withEnv({ MCP_PROXY_CIMD_DEFAULT_CLIENT_ID: 'default-client' }, () => {
+    withEnv({ MCP_PROXY_CIMD_DEFAULT_CLIENT_ID: 'default-client', MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET }, () => {
       const cfg = loadConfig();
       expect(cfg.cimdDefaultClientId).toBe('default-client');
       expect(cfg.cimdEnabled).toBe(true);
@@ -362,20 +365,225 @@ describe('loadConfig — auto-enable logic', () => {
   });
 
   it('enables proxyAuthEndpoint when CIMD is configured', () => {
-    withEnv({ MCP_PROXY_CIMD_DEFAULT_CLIENT_ID: 'x' }, () => {
+    withEnv({ MCP_PROXY_CIMD_DEFAULT_CLIENT_ID: 'x', MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET }, () => {
       expect(loadConfig().proxyAuthEndpoint).toBe(true);
     });
   });
 
   it('enables proxyAuthEndpoint when scopesRemoved is set', () => {
-    withEnv({ MCP_PROXY_AUTH_SCOPES_REMOVED: 'offline_access' }, () => {
+    withEnv({ MCP_PROXY_AUTH_SCOPES_REMOVED: 'offline_access', MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
       expect(loadConfig().proxyAuthEndpoint).toBe(true);
     });
   });
 
   it('enables proxyAuthEndpoint when scopesPreserved is set', () => {
-    withEnv({ MCP_PROXY_AUTH_SCOPES_PRESERVED: 'openid' }, () => {
+    withEnv({ MCP_PROXY_AUTH_SCOPES_PRESERVED: 'openid', MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
       expect(loadConfig().proxyAuthEndpoint).toBe(true);
+    });
+  });
+
+  it('enables proxyAuthEndpoint when only state secret is set', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
+      expect(loadConfig().proxyAuthEndpoint).toBe(true);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// State secret validation
+// ---------------------------------------------------------------------------
+describe('loadConfig — state secret', () => {
+  it('throws when proxyAuthEndpoint is true but state secret is missing', () => {
+    withEnv({ MCP_PROXY_AUTH_SCOPES_REMOVED: 'offline_access' }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_PROXY_AUTH_STATE_SECRET/);
+    });
+  });
+
+  it('treats empty string as not configured (does not activate auth proxy)', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: '' }, () => {
+      const cfg = loadConfig();
+      expect(cfg.proxyAuthEndpoint).toBe(false);
+      expect(cfg.authStateSecret).toBeUndefined();
+    });
+  });
+
+  it('treats whitespace-only as not configured', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: '   ' }, () => {
+      const cfg = loadConfig();
+      expect(cfg.proxyAuthEndpoint).toBe(false);
+      expect(cfg.authStateSecret).toBeUndefined();
+    });
+  });
+
+  it('throws for non-hex characters', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: 'g'.repeat(64) }, () => {
+      expect(() => loadConfig()).toThrow(/hex/);
+    });
+  });
+
+  it('throws for odd-length hex string', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: 'a'.repeat(65) }, () => {
+      expect(() => loadConfig()).toThrow(/even length/);
+    });
+  });
+
+  it('throws for hex string shorter than 64 chars (< 32 bytes)', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: 'a'.repeat(62) }, () => {
+      expect(() => loadConfig()).toThrow(/at least 32 bytes/);
+    });
+  });
+
+  it('parses valid hex secret to Buffer', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
+      const cfg = loadConfig();
+      expect(cfg.authStateSecret).toBeInstanceOf(Buffer);
+      expect(cfg.authStateSecret!.length).toBe(32);
+    });
+  });
+
+  it('accepts uppercase hex', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: 'A'.repeat(64), MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
+      const cfg = loadConfig();
+      expect(cfg.authStateSecret).toBeInstanceOf(Buffer);
+    });
+  });
+
+  it('trims whitespace from secret', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: '  ' + VALID_HEX_SECRET + '  ', MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
+      const cfg = loadConfig();
+      expect(cfg.authStateSecret).toBeInstanceOf(Buffer);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// State secret previous (optional)
+// ---------------------------------------------------------------------------
+describe('loadConfig — state secret previous', () => {
+  it('is undefined when not set', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
+      expect(loadConfig().authStateSecretPrevious).toBeUndefined();
+    });
+  });
+
+  it('treats empty string as not configured', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS: '', MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
+      expect(loadConfig().authStateSecretPrevious).toBeUndefined();
+    });
+  });
+
+  it('parses valid previous secret', () => {
+    withEnv({
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+      MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS: 'b'.repeat(64),
+      MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS,
+    }, () => {
+      const cfg = loadConfig();
+      expect(cfg.authStateSecretPrevious).toBeInstanceOf(Buffer);
+      expect(cfg.authStateSecretPrevious!.length).toBe(32);
+    });
+  });
+
+  it('throws for invalid previous secret format', () => {
+    withEnv({
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+      MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS: 'not-hex',
+      MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS,
+    }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS.*hex/);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// State TTL
+// ---------------------------------------------------------------------------
+describe('loadConfig — state TTL', () => {
+  it('defaults to 30 minutes (1800 seconds)', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
+      expect(loadConfig().authStateTtlSeconds).toBe(1800);
+    });
+  });
+
+  it('parses custom TTL', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_AUTH_STATE_TTL_MINUTES: '10', MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
+      expect(loadConfig().authStateTtlSeconds).toBe(600);
+    });
+  });
+
+  it('throws for TTL below minimum (0)', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_AUTH_STATE_TTL_MINUTES: '0', MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_PROXY_AUTH_STATE_TTL_MINUTES.*>= 1/);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Allowed redirect URIs
+// ---------------------------------------------------------------------------
+describe('loadConfig — allowed redirect URIs', () => {
+  it('returns empty array when not set (CIMD-only mode)', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_CIMD_DEFAULT_CLIENT_ID: 'default' }, () => {
+      expect(loadConfig().allowedRedirectUris).toEqual([]);
+    });
+  });
+
+  it('treats empty string as not configured (returns empty array)', () => {
+    withEnv({ MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET, MCP_PROXY_CIMD_DEFAULT_CLIENT_ID: 'default', MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: '' }, () => {
+      expect(loadConfig().allowedRedirectUris).toEqual([]);
+    });
+  });
+
+  it('parses comma-separated patterns', () => {
+    withEnv({
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+      MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: 'http://localhost:*,https://example.com/cb',
+    }, () => {
+      expect(loadConfig().allowedRedirectUris).toEqual(['http://localhost:*', 'https://example.com/cb']);
+    });
+  });
+
+  it('trims whitespace per pattern', () => {
+    withEnv({
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+      MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: ' http://localhost:* , https://example.com/cb ',
+    }, () => {
+      expect(loadConfig().allowedRedirectUris).toEqual(['http://localhost:*', 'https://example.com/cb']);
+    });
+  });
+
+  it('throws for pattern without scheme', () => {
+    withEnv({
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+      MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: 'localhost:8080',
+    }, () => {
+      expect(() => loadConfig()).toThrow(/invalid pattern.*scheme/i);
+    });
+  });
+
+  it('throws when auth proxy active with DCR but no patterns configured', () => {
+    withEnv({
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+      MCP_PROXY_DCR_CLIENT_ID: 'mcp-client',
+    }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS/);
+    });
+  });
+
+  it('throws when required (standalone state secret, no DCR, no CIMD) but empty', () => {
+    withEnv({
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+    }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS/);
+    });
+  });
+
+  it('does not throw when CIMD-only (no DCR)', () => {
+    withEnv({
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+      MCP_PROXY_CIMD_DEFAULT_CLIENT_ID: 'default',
+    }, () => {
+      expect(() => loadConfig()).not.toThrow();
     });
   });
 });

@@ -7,6 +7,8 @@ import {
   validateRedirectUri,
   sanitizeForError,
 } from '../cimd';
+import { matchesRedirectPattern } from '../uri-validation';
+import { signState } from '../state-signer';
 
 export interface AuthScopeConfig {
   removed?: string[];
@@ -16,6 +18,13 @@ export interface AuthScopeConfig {
 export interface AuthCimdConfig {
   resolve: (cimdUrl: string) => string | null;
   validateAndCache: (cimdUrl: string) => Promise<CimdDocument>;
+}
+
+export interface AuthStateConfig {
+  baseUrl: string;
+  secret: Buffer;
+  ttlSeconds: number;
+  allowedRedirectUris: string[];
 }
 
 export function filterScopes(
@@ -41,6 +50,7 @@ export function createAuthorizeRouter(
   logger: Logger,
   scopeConfig: AuthScopeConfig = {},
   cimdConfig?: AuthCimdConfig,
+  stateConfig?: AuthStateConfig,
 ): Router {
   const router = Router();
 
@@ -60,9 +70,18 @@ export function createAuthorizeRouter(
       responseType: params.get('response_type'),
     });
 
+    // Strip unsupported response_mode
+    const responseMode = params.get('response_mode');
+    if (responseMode && responseMode !== 'query') {
+      logger.debug('authorize: unsupported response_mode stripped', { responseMode });
+      params.delete('response_mode');
+    }
+
     const clientId = params.get('client_id') ?? '';
+    let isCimd = false;
 
     if (cimdConfig && clientId && isCimdClientId(clientId)) {
+      isCimd = true;
       const urlValidation = validateCimdUrl(clientId);
       if (!urlValidation.valid) {
         res.status(400).json({
@@ -109,6 +128,43 @@ export function createAuthorizeRouter(
       params.set('client_id', upstreamClientId);
     }
 
+    // Validate and wrap redirect_uri for iss interception
+    if (stateConfig) {
+      const redirectUri = params.get('redirect_uri');
+      if (!redirectUri) {
+        res.status(400).json({
+          error: 'invalid_request',
+          error_description: 'redirect_uri is required',
+        });
+        return;
+      }
+
+      if (!isCimd) {
+        const match = matchesRedirectPattern(redirectUri, stateConfig.allowedRedirectUris);
+        if (!match.allowed) {
+          logger.debug('authorize: redirect_uri rejected', {
+            reason: match.reason,
+            uri: redirectUri.slice(0, 200),
+          });
+          res.status(400).json({
+            error: 'invalid_request',
+            error_description: 'redirect_uri not allowed',
+          });
+          return;
+        }
+      }
+
+      const originalState = params.get('state') ?? null;
+      const blob = signState(
+        { redirectUri, state: originalState },
+        stateConfig.secret,
+        stateConfig.ttlSeconds,
+      );
+
+      params.set('redirect_uri', `${stateConfig.baseUrl}/authorize/callback`);
+      params.set('state', blob);
+    }
+
     const scope = params.get('scope');
     if (scope) {
       const filtered = filterScopes(scope, scopeConfig);
@@ -119,7 +175,9 @@ export function createAuthorizeRouter(
       }
     }
 
-    const redirectUrl = `${getUpstreamAuthEndpoint()}?${params.toString()}`;
+    const upstreamEndpoint = getUpstreamAuthEndpoint();
+    const separator = upstreamEndpoint.includes('?') ? '&' : '?';
+    const redirectUrl = `${upstreamEndpoint}${separator}${params.toString()}`;
     logger.debug('authorize redirect', { target: redirectUrl });
     res.redirect(302, redirectUrl);
   });

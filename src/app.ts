@@ -7,6 +7,7 @@ import { createHttpMetricsMiddleware, HttpMetrics } from './middleware/metrics';
 import { buildWellKnownDocument, createWellKnownRouter } from './routes/well-known';
 import { createRegisterRouter } from './routes/register';
 import { createAuthorizeRouter, AuthCimdConfig } from './routes/authorize';
+import { createAuthorizeCallbackRouter } from './routes/authorize-callback';
 import { createHealthRouter } from './routes/health';
 import { createMetricsRouter } from './routes/metrics';
 import { createTokenRouter } from './routes/token';
@@ -24,11 +25,15 @@ export interface UpstreamState {
   wellKnownDocument: Record<string, unknown>;
   upstreamAuthorizationEndpoint: string;
   upstreamTokenEndpoint: string;
+  upstreamIssuer: string;
+  upstreamSupportsIss: boolean;
 }
 
 export interface CreateAppOptions {
   config: AppConfig;
   upstreamDoc: Record<string, unknown>;
+  /** Whether the upstream doc is a fallback (not fetched successfully). */
+  fromFallback?: boolean;
   /** Override CIMD document fetcher (for testing). Defaults to fetchCimdDocument. */
   cimdFetcher?: (url: string) => Promise<import('./cimd').CimdDocument>;
 }
@@ -36,22 +41,27 @@ export interface CreateAppOptions {
 export function buildUpstreamState(
   upstreamDoc: Record<string, unknown>,
   config: AppConfig,
+  fromFallback = false,
 ): UpstreamState {
   return {
     wellKnownDocument: buildWellKnownDocument(upstreamDoc, config),
     upstreamAuthorizationEndpoint: upstreamDoc.authorization_endpoint as string,
     upstreamTokenEndpoint: upstreamDoc.token_endpoint as string,
+    upstreamIssuer: (upstreamDoc.issuer as string) ?? config.upstreamSsoUrl,
+    upstreamSupportsIss: fromFallback
+      ? false
+      : upstreamDoc.authorization_response_iss_parameter_supported === true,
   };
 }
 
-export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions): {
+export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: CreateAppOptions): {
   app: Application;
   metricsRegistry: IMetricsRegistry;
   updateUpstream: (newUpstreamDoc: Record<string, unknown>) => void;
   setShuttingDown: () => void;
   isShuttingDown: () => boolean;
 } {
-  let state = buildUpstreamState(upstreamDoc, config);
+  let state = buildUpstreamState(upstreamDoc, config, fromFallback);
   const logger = createLogger(config.debug);
 
   const metricsRegistry = createMetricsRegistry(config.metricsEnabled);
@@ -99,10 +109,6 @@ export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions
   let cimdConfig: AuthCimdConfig | undefined;
 
   if (config.cimdEnabled) {
-    if (!state.upstreamTokenEndpoint) {
-      throw new Error('Upstream well-known document is missing token_endpoint (required by CIMD token proxy)');
-    }
-
     const pinnedUrls = new Set(Object.keys(config.cimdMap));
     const cimdCache = new CimdCache({
       ttlMinutes: config.cimdCacheMinutes,
@@ -115,29 +121,64 @@ export function createApp({ config, upstreamDoc, cimdFetcher }: CreateAppOptions
       resolve: (cimdUrl: string) => resolveUpstreamClientId(cimdUrl, config.cimdMap, config.cimdDefaultClientId),
       validateAndCache: (cimdUrl: string) => cimdCache.get(cimdUrl, fetcher),
     };
-
-    const tokenRouter = createTokenRouter(
-      () => state.upstreamTokenEndpoint,
-      { map: config.cimdMap, defaultClientId: config.cimdDefaultClientId },
-      logger,
-      metricsRegistry,
-    );
-    if (metricsMiddleware) app.use(metricsMiddleware, tokenRouter);
-    else app.use(tokenRouter);
   }
 
   if (config.proxyAuthEndpoint) {
     if (!state.upstreamAuthorizationEndpoint) {
       throw new Error('Upstream well-known document is missing authorization_endpoint');
     }
+    if (!state.upstreamTokenEndpoint) {
+      throw new Error('Upstream well-known document is missing token_endpoint');
+    }
+
+    const stateConfig = config.authStateSecret ? {
+      baseUrl: config.baseUrl,
+      secret: config.authStateSecret,
+      ttlSeconds: config.authStateTtlSeconds,
+      allowedRedirectUris: config.allowedRedirectUris,
+    } : undefined;
+
     const authorizeRouter = createAuthorizeRouter(
       () => state.upstreamAuthorizationEndpoint,
       logger,
       { removed: config.authScopesRemoved, preserved: config.authScopesPreserved },
       cimdConfig,
+      stateConfig,
     );
     if (metricsMiddleware) app.use(metricsMiddleware, authorizeRouter);
     else app.use(authorizeRouter);
+
+    // Callback router for iss interception
+    if (config.authStateSecret) {
+      const secrets = (): Buffer[] => {
+        const result = [config.authStateSecret!];
+        if (config.authStateSecretPrevious) result.push(config.authStateSecretPrevious);
+        return result;
+      };
+
+      const callbackRouter = createAuthorizeCallbackRouter({
+        baseUrl: config.baseUrl,
+        getSecrets: secrets,
+        getUpstreamIssuer: () => state.upstreamIssuer,
+        getUpstreamSupportsIss: () => state.upstreamSupportsIss,
+      }, logger);
+      if (metricsMiddleware) app.use(metricsMiddleware, callbackRouter);
+      else app.use(callbackRouter);
+    }
+
+    // Token proxy (unified — always active when authorize proxy is active)
+    const tokenRouter = createTokenRouter(
+      () => state.upstreamTokenEndpoint,
+      { map: config.cimdMap, defaultClientId: config.cimdDefaultClientId },
+      logger,
+      metricsRegistry,
+      config.authStateSecret ? {
+        baseUrl: config.baseUrl,
+        allowedRedirectUris: config.allowedRedirectUris,
+      } : undefined,
+    );
+    if (metricsMiddleware) app.use(metricsMiddleware, tokenRouter);
+    else app.use(tokenRouter);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

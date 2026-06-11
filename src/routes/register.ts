@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { AppConfig } from '../config';
 import { Logger, requestMeta } from '../logger';
 import { requireJsonContentType } from '../middleware/security';
+import { validateRedirectUriSecurity } from '../uri-validation';
 
 const DCR_ECHO_FIELDS = [
   'redirect_uris',
@@ -35,13 +36,9 @@ export function validateRedirectUris(value: unknown): ValidationError {
       return { field: `redirect_uris[${i}]`, reason: 'must be a string' };
     }
     const uri = value[i] as string;
-    try {
-      const parsed = new URL(uri);
-      if (parsed.hash) {
-        return { field: `redirect_uris[${i}]`, reason: 'must not contain a fragment' };
-      }
-    } catch {
-      return { field: `redirect_uris[${i}]`, reason: 'is not a valid URI' };
+    const result = validateRedirectUriSecurity(uri);
+    if (!result.valid) {
+      return { field: `redirect_uris[${i}]`, reason: result.reason };
     }
   }
   return null;

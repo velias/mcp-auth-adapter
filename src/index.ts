@@ -123,7 +123,11 @@ async function main(): Promise<void> {
   }
   const initialFetchDuration = Number(process.hrtime.bigint() - fetchStart) / 1e9;
 
-  const { app, metricsRegistry, updateUpstream, setShuttingDown } = createApp({ config, upstreamDoc });
+  const { app, metricsRegistry, updateUpstream, setShuttingDown } = createApp({
+    config,
+    upstreamDoc,
+    fromFallback: !initialFetchOk,
+  });
 
   const doRefresh = createInstrumentedRefresh(config.upstreamSsoUrl, log, metricsRegistry, updateUpstream);
   doRefresh.recordInitial(initialFetchOk, initialFetchDuration);
@@ -136,8 +140,11 @@ async function main(): Promise<void> {
       baseUrl: config.baseUrl,
       upstreamSso: config.upstreamSsoUrl,
       authProxy: config.proxyAuthEndpoint ? 'enabled' : 'disabled',
+      issInterception: config.proxyAuthEndpoint ? 'enabled' : 'disabled',
+      tokenProxy: config.proxyAuthEndpoint ? 'enabled' : 'disabled',
       dcrProxy: config.proxyDcrEndpoint ? 'enabled' : 'disabled',
       cimdProxy: config.cimdEnabled ? 'enabled (EXPERIMENTAL)' : 'disabled',
+      allowedRedirectUris: config.allowedRedirectUris.length,
       metrics: config.metricsEnabled ? 'enabled' : 'disabled',
       refreshMinutes: config.wellKnownRefreshMinutes,
       debug: config.debug,
