@@ -126,7 +126,7 @@ export function createAuthorizeCallbackRouter(
       redirectUrl.searchParams.set('iss', config.baseUrl);
 
       logger.debug('authorize callback: success redirect', {
-        target: redirectUrl.origin + redirectUrl.pathname,
+        target: redirectUrl.href.split('?')[0],
       });
 
       res.set('Cache-Control', 'no-store');

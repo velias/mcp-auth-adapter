@@ -72,6 +72,7 @@ async function handleTokenRequest(
       ...requestMeta(req),
       clientId: clientId.startsWith('https://') ? clientId.slice(0, 80) : clientId,
       grantType,
+      redirectUri: redirectUri ? redirectUri.split('?')[0].slice(0, 200) : undefined,
     });
 
     const params = new URLSearchParams();
