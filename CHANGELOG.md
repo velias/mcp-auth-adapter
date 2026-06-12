@@ -5,6 +5,25 @@ This file is auto-generated from [GitHub Releases](https://github.com/velias/mcp
 
 ---
 
+## [v2.0.0](https://github.com/velias/mcp-auth-adapter/releases/tag/v2.0.0) — 2026-06-11
+
+### BREAKING CHANGES
+* `MCP_PROXY_AUTH_STATE_SECRET` is now required when the authorize proxy is active (scope filtering, CIMD, or standalone iss interception). Existing deployments must add this variable — generate with `openssl rand -hex 32`.
+* `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` is now required for non-CIMD-only deployments. Configure allowed MCP client redirect URI patterns (see README for known client patterns).
+* `token_endpoint` in well-known metadata is now rewritten to the adapter's URL when the authorize proxy is active (was only for CIMD).
+* Upstream IdP client must register `{MCP_BASE_URL}/authorize/callback` as an allowed redirect URI.
+
+### Features
+* RFC 9207 `iss` parameter compliance — intercepts upstream IdP authorization responses to provide correct issuer identification, preventing mix-up attack rejections by MCP clients enforcing the 2026-07-28 MCP Auth Spec Draft
+* Unified token proxy — `/token` is now always proxied when the authorize proxy is active, handling `redirect_uri` rewriting for authorization code grants
+* Zero-downtime secret rotation via `MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS`
+* Configurable state blob TTL via `MCP_PROXY_AUTH_STATE_TTL_MINUTES` (default 30 min)
+* Shared URI security validation — tightened redirect_uri checks (control chars, userinfo rejection) across DCR and authorize endpoints
+
+**Full Changelog**: https://github.com/velias/mcp-auth-adapter/compare/v1.0.1...v2.0.0
+
+---
+
 ## [v1.0.1](https://github.com/velias/mcp-auth-adapter/releases/tag/v1.0.1) — 2026-05-25
 
 ### Features

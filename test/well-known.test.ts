@@ -34,6 +34,8 @@ const MOCK_UPSTREAM_DOC: Record<string, unknown> = {
   tls_client_certificate_bound_access_tokens: true,
 };
 
+const TEST_STATE_SECRET = Buffer.from('a'.repeat(64), 'hex');
+
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     baseUrl: 'http://localhost:3000',
@@ -50,6 +52,9 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     cimdEnabled: false,
     metricsEnabled: false,
     shutdownTimeoutSeconds: 30,
+    authStateSecret: TEST_STATE_SECRET,
+    authStateTtlSeconds: 1800,
+    allowedRedirectUris: ['http://localhost:*'],
     ...overrides,
   };
 }
@@ -68,7 +73,7 @@ describe('Well-Known Discovery Endpoints', () => {
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toMatch(/application\/json/);
       expect(res.body.issuer).toBe('http://localhost:3000');
-      expect(res.body.token_endpoint).toBe(MOCK_UPSTREAM_DOC.token_endpoint);
+      expect(res.body.token_endpoint).toBe('http://localhost:3000/token');
       expect(res.body.jwks_uri).toBe(MOCK_UPSTREAM_DOC.jwks_uri);
       expect(res.body.code_challenge_methods_supported).toEqual(['plain', 'S256']);
     });
@@ -167,12 +172,12 @@ describe('Well-Known Discovery Endpoints', () => {
       expect(res.body.issuer).toBe('https://proxy.example.com');
     });
 
-    it('omits authorization_response_iss_parameter_supported when proxyAuthEndpoint is true', async () => {
+    it('sets authorization_response_iss_parameter_supported to true when proxyAuthEndpoint is true', async () => {
       const app = makeApp(makeConfig({ proxyAuthEndpoint: true }));
 
       const res = await request(app).get('/.well-known/openid-configuration');
 
-      expect(res.body.authorization_response_iss_parameter_supported).toBeUndefined();
+      expect(res.body.authorization_response_iss_parameter_supported).toBe(true);
     });
 
     it('preserves authorization_response_iss_parameter_supported when proxyAuthEndpoint is false', async () => {
@@ -239,7 +244,7 @@ describe('Well-Known Discovery Endpoints', () => {
 
   describe('Upstream document refresh', () => {
     it('updateUpstream swaps the well-known document', async () => {
-      const config = makeConfig();
+      const config = makeConfig({ proxyAuthEndpoint: false, authStateSecret: undefined });
       const { app, updateUpstream } = createApp({ config, upstreamDoc: MOCK_UPSTREAM_DOC });
 
       const before = await request(app).get('/.well-known/openid-configuration');
@@ -322,7 +327,7 @@ describe('Well-Known Discovery Endpoints', () => {
         issuer: 'https://sso.example.com/auth/realms/test',
         authorization_endpoint: 'https://sso.example.com/auth/realms/test/protocol/openid-connect/auth',
       };
-      const app = makeApp(makeConfig(), noTokenEndpoint);
+      const app = makeApp(makeConfig({ proxyAuthEndpoint: false, authStateSecret: undefined }), noTokenEndpoint);
 
       const res = await request(app).get('/.well-known/openid-configuration');
 
@@ -361,7 +366,7 @@ describe('Well-Known Discovery Endpoints', () => {
       expect(res.body.issuer).toBe('http://localhost:3000');
       expect(res.body.registration_endpoint).toBe('http://localhost:3000/register');
       expect(res.body.code_challenge_methods_supported).toEqual(['S256']);
-      expect(res.body.token_endpoint).toContain('/protocol/openid-connect/token');
+      expect(res.body.token_endpoint).toBe('http://localhost:3000/token');
     });
   });
 });
@@ -454,7 +459,7 @@ describe('CIMD well-known modifications', () => {
   });
 
   it('does not modify well-known when CIMD disabled', async () => {
-    const config = makeConfig({ cimdEnabled: false, cimdMap: {} });
+    const config = makeConfig({ cimdEnabled: false, cimdMap: {}, proxyAuthEndpoint: false, authStateSecret: undefined });
     const app = makeApp(config);
 
     const res = await request(app).get('/.well-known/oauth-authorization-server');

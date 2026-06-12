@@ -330,7 +330,7 @@ describe('POST /token (Token Proxy)', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe('invalid_client');
-      expect(res.body.error_description).toMatch(/username|password/);
+      expect(res.body.error_description).toMatch(/userinfo/);
     });
 
     it('does not validate non-CIMD client_id as URL', async () => {
@@ -363,6 +363,121 @@ describe('POST /token (Token Proxy)', () => {
         });
 
       expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('redirect_uri validation and rewriting', () => {
+    const REDIRECT_CONFIG = {
+      baseUrl: 'http://localhost:3000',
+      allowedRedirectUris: ['http://localhost:*', 'http://127.0.0.1:*'],
+    };
+
+    function createAppWithRedirect(options: {
+      map?: Record<string, string>;
+      defaultClientId?: string;
+    } = {}) {
+      const { map = CIMD_MAP, defaultClientId } = options;
+      const app = express();
+      app.disable('x-powered-by');
+      app.use(createTokenRouter(
+        () => UPSTREAM_TOKEN_URL,
+        { map, defaultClientId },
+        createLogger(false),
+        undefined,
+        REDIRECT_CONFIG,
+      ));
+      return app;
+    }
+
+    it('rewrites redirect_uri to adapter callback URL for authorization_code grant', async () => {
+      mockUpstreamTokenResponse({ status: 200, body: { access_token: 'at', token_type: 'bearer' } });
+      const app = createAppWithRedirect();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'my-client',
+          code: 'code-123',
+          redirect_uri: 'http://localhost:8080/callback',
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const body = new URLSearchParams(fetchCall[1].body);
+      expect(body.get('redirect_uri')).toBe('http://localhost:3000/authorize/callback');
+    });
+
+    it('rejects missing redirect_uri for authorization_code grant', async () => {
+      const app = createAppWithRedirect();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'my-client',
+          code: 'code-123',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+      expect(res.body.error_description).toContain('redirect_uri');
+    });
+
+    it('rejects redirect_uri not matching allowed patterns', async () => {
+      const app = createAppWithRedirect();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'my-client',
+          code: 'code-123',
+          redirect_uri: 'https://evil.com/steal',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+      expect(res.body.error_description).toContain('redirect_uri');
+    });
+
+    it('passes through refresh_token grant without redirect_uri validation', async () => {
+      mockUpstreamTokenResponse({ status: 200, body: { access_token: 'new-at', token_type: 'bearer' } });
+      const app = createAppWithRedirect();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'refresh_token',
+          client_id: 'my-client',
+          refresh_token: 'rt-123',
+        });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('skips pattern validation for CIMD clients (validates via CIMD doc)', async () => {
+      mockUpstreamTokenResponse({ status: 200, body: { access_token: 'at', token_type: 'bearer' } });
+      const app = createAppWithRedirect({ defaultClientId: 'fallback' });
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'https://cursor.com/oauth-client.json',
+          code: 'code-123',
+          redirect_uri: 'http://localhost:8080/callback',
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const body = new URLSearchParams(fetchCall[1].body);
+      expect(body.get('redirect_uri')).toBe('http://localhost:3000/authorize/callback');
     });
   });
 });

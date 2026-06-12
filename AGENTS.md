@@ -21,9 +21,22 @@ issue tokens — all real auth/token work stays on the upstream IdP.
   Invalid input returns RFC 7591 `invalid_client_metadata` errors.
   Debug logs include `client_name` and `redirect_uris` count for audit.
   Auto-enables when `MCP_PROXY_DCR_CLIENT_ID` is set.
-- **Authorization adapter** — `GET /authorize` forwards to the upstream
-  authorization URL with configurable scope filtering and optional CIMD
-  client_id substitution. Auto-enables when scope filtering or CIMD is configured.
+- **Authorization adapter** — `GET /authorize` validates `redirect_uri` against
+  configured patterns, wraps original `redirect_uri` + `state` into a signed
+  HMAC state blob, rewrites `redirect_uri` to the adapter's callback, and
+  redirects to upstream. Supports scope filtering and optional CIMD client_id
+  substitution. Auto-enables when scope filtering, CIMD, or
+  `MCP_PROXY_AUTH_STATE_SECRET` is configured.
+- **Authorization callback (RFC 9207 `iss` interception)** —
+  `GET /authorize/callback` receives the upstream redirect, verifies the signed
+  state blob (HMAC + expiry), validates upstream `iss` parameter using two-tier
+  logic, then redirects to the original MCP client `redirect_uri` with the
+  adapter's `iss` value. Prevents OAuth mix-up attacks per RFC 9207.
+- **Token proxy** — `POST /token` proxies token requests to the upstream IdP.
+  For `authorization_code` grants, validates `redirect_uri` against allowed
+  patterns and rewrites it to the adapter's callback URL. For `refresh_token`
+  grants, passes through without redirect_uri modification. Always active when
+  the authorize proxy is active.
 - **CIMD adapter** (EXPERIMENTAL) — Accepts CIMD-style `client_id` URLs from
   MCP clients, validates metadata documents, maps them to upstream IdP
   client_ids, and proxies `/authorize` and `/token` with client_id substitution.
@@ -53,6 +66,8 @@ src/
   logger.ts          # Structured line logger (ts= level= msg= ...)
   metrics.ts         # Prometheus metrics primitives (Counter, Gauge, Histogram, Registry, no-op stubs)
   fetch-utils.ts     # Shared fetch helpers (readResponseWithLimit — streaming read with byte cap)
+  state-signer.ts    # HMAC-SHA256 state blob signing/verification with key rotation
+  uri-validation.ts  # Shared redirect URI security validation and pattern matching
   middleware/
     security.ts      # requireJsonContentType (Content-Type guard for DCR)
     metrics.ts       # Per-router HTTP request counting and latency middleware
@@ -60,19 +75,24 @@ src/
   routes/
     well-known.ts    # /.well-known/* — filtered upstream OIDC metadata
     register.ts      # POST /register — fixed client_id DCR with input validation
-    authorize.ts     # GET /authorize — redirect adapter, scope filtering, CIMD client_id substitution
-    token.ts         # POST /token — token endpoint proxy with CIMD client_id substitution (EXPERIMENTAL)
+    authorize.ts     # GET /authorize — redirect adapter, scope filtering, state wrapping, CIMD
+    authorize-callback.ts # GET /authorize/callback — iss interception, state verification
+    token.ts         # POST /token — unified token proxy with redirect_uri rewriting
     health.ts        # /health/live, /health/ready
     metrics.ts       # GET /metrics — Prometheus text exposition format endpoint
 test/
-  well-known.test.ts # Well-known doc content, whitelist, cache-control, refresh, CIMD fields
-  register.test.ts   # DCR response, input validation, content-type guard, feature flag
-  authorize.test.ts  # Redirect, configurable scope filtering, feature flag, CIMD integration
-  token.test.ts      # Token proxy: substitution, passthrough, security, error handling
-  cimd.test.ts       # CIMD URL/doc validation, cache, resolution, IP checks
-  cimd-fetch.test.ts # CIMD fetch with mocked HTTP: SSRF, size, timeout, content-type
-  health.test.ts     # Liveness/readiness probes
-  metrics.test.ts    # Metrics primitives, no-op stubs, /metrics endpoint, config parsing
+  well-known.test.ts          # Well-known doc content, whitelist, cache-control, refresh, CIMD fields
+  register.test.ts            # DCR response, input validation, content-type guard, feature flag
+  authorize.test.ts           # Redirect, scope filtering, state wrapping, redirect_uri validation, CIMD
+  authorize-callback.test.ts  # Callback: state verification, iss validation, error forwarding
+  token.test.ts               # Token proxy: substitution, redirect_uri rewriting, passthrough
+  state-signer.test.ts        # State blob sign/verify, tamper, expiry, key rotation
+  uri-validation.test.ts      # URI security checks, pattern matching
+  cimd.test.ts                # CIMD URL/doc validation, cache, resolution, IP checks
+  cimd-fetch.test.ts          # CIMD fetch with mocked HTTP: SSRF, size, timeout, content-type
+  health.test.ts              # Liveness/readiness probes
+  metrics.test.ts             # Metrics primitives, no-op stubs, /metrics endpoint, config parsing
+  config.test.ts              # Config parsing, validation, auto-enable logic
 ```
 
 ## Architecture notes
@@ -88,8 +108,10 @@ test/
   `true`) explicitly controls the metrics subsystem.
 - **`UpstreamState`** holds the cached well-known document (already
   filtered/merged for clients), the raw `upstreamAuthorizationEndpoint` URL
-  (used by the authorize redirect), and `upstreamTokenEndpoint` (used by the
-  CIMD token proxy).
+  (used by the authorize redirect), `upstreamTokenEndpoint` (used by the
+  token proxy), `upstreamIssuer` (for RFC 9207 validation), and
+  `upstreamSupportsIss` (derived from upstream metadata, defaults to `false`
+  when the upstream doc cannot be fetched).
 - **Graceful shutdown.** `SIGTERM`/`SIGINT` set `shuttingDown` (readiness probe
   returns 503), clear the refresh timer, and call `server.close()` to drain
   in-flight requests with a configurable force-exit timeout.
@@ -123,6 +145,11 @@ All env vars are prefixed with `MCP_`. See `.env.example` for the full list.
 Key ones: `MCP_BASE_URL`, `MCP_UPSTREAM_SSO_URL`, `MCP_PROXY_DCR_CLIENT_ID`,
 `MCP_WELL_KNOWN_SCOPES_SUPPORTED`, `MCP_PROXY_AUTH_SCOPES_REMOVED`,
 `MCP_PROXY_AUTH_SCOPES_PRESERVED`.
+
+RFC 9207 iss interception: `MCP_PROXY_AUTH_STATE_SECRET` (required when
+authorize proxy is active), `MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS` (optional,
+for key rotation), `MCP_PROXY_AUTH_STATE_TTL_MINUTES` (default 30),
+`MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` (required when DCR is also active).
 
 CIMD (EXPERIMENTAL): `MCP_PROXY_CIMD_MAP`, `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID`,
 `MCP_PROXY_CIMD_CACHE_MINUTES`.

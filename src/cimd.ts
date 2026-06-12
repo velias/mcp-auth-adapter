@@ -1,6 +1,7 @@
 import * as dns from 'dns';
 import { ICounter, IGauge, IMetricsRegistry } from './metrics';
 import { readResponseWithLimit } from './fetch-utils';
+import { validateRedirectUriSecurity } from './uri-validation';
 
 export interface CimdDocument {
   client_id: string;
@@ -38,12 +39,11 @@ export function validateCimdUrl(url: string): CimdUrlValidation {
     // Fall through to URL parsing which will also catch invalid URLs
   }
 
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return { valid: false, reason: 'not a valid URL' };
+  const securityResult = validateRedirectUriSecurity(url);
+  if (!securityResult.valid) {
+    return { valid: false, reason: securityResult.reason };
   }
+  const parsed = securityResult.parsed;
 
   if (parsed.protocol !== 'https:') {
     return { valid: false, reason: 'scheme must be https' };
@@ -51,14 +51,6 @@ export function validateCimdUrl(url: string): CimdUrlValidation {
 
   if (!parsed.pathname || parsed.pathname === '/') {
     return { valid: false, reason: 'must contain a path component beyond /' };
-  }
-
-  if (parsed.hash) {
-    return { valid: false, reason: 'must not contain a fragment' };
-  }
-
-  if (parsed.username || parsed.password) {
-    return { valid: false, reason: 'must not contain username or password' };
   }
 
   if (parsed.search) {

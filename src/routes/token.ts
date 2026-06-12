@@ -3,6 +3,7 @@ import express from 'express';
 import { Logger, requestMeta } from '../logger';
 import { readResponseWithLimit } from '../fetch-utils';
 import { isCimdClientId, validateCimdUrl, resolveUpstreamClientId, sanitizeForError } from '../cimd';
+import { matchesRedirectPattern } from '../uri-validation';
 import { IMetricsRegistry, ICounter, IHistogram } from '../metrics';
 
 const TOKEN_UPSTREAM_TIMEOUT_MS = 10000;
@@ -14,11 +15,17 @@ export interface TokenCimdResolver {
   defaultClientId?: string;
 }
 
+export interface TokenRedirectConfig {
+  baseUrl: string;
+  allowedRedirectUris: string[];
+}
+
 export function createTokenRouter(
   getUpstreamTokenEndpoint: () => string,
   cimdResolver: TokenCimdResolver,
   logger: Logger,
   metricsRegistry?: IMetricsRegistry,
+  redirectConfig?: TokenRedirectConfig,
 ): Router {
   const router = Router();
 
@@ -38,7 +45,7 @@ export function createTokenRouter(
     }
     next();
   }, urlencodedParser, async (req: Request, res: Response) => {
-    await handleTokenRequest(req, res, getUpstreamTokenEndpoint, cimdResolver, logger, upstreamDuration, upstreamStatus);
+    await handleTokenRequest(req, res, getUpstreamTokenEndpoint, cimdResolver, logger, upstreamDuration, upstreamStatus, redirectConfig);
   });
 
   return router;
@@ -52,25 +59,32 @@ async function handleTokenRequest(
   logger: Logger,
   upstreamDuration?: IHistogram,
   upstreamStatusCounter?: ICounter,
+  redirectConfig?: TokenRedirectConfig,
 ): Promise<void> {
   try {
-    const body = req.body as Record<string, string>;
-    const clientId = body.client_id ?? '';
+    const rawBody = req.body as Record<string, unknown>;
+    const str = (v: unknown): string => typeof v === 'string' ? v : '';
+    const clientId = str(rawBody.client_id);
+    const grantType = str(rawBody.grant_type);
+    const redirectUri = str(rawBody.redirect_uri);
 
     logger.debug('token proxy request', {
       ...requestMeta(req),
       clientId: clientId.startsWith('https://') ? clientId.slice(0, 80) : clientId,
-      grantType: body.grant_type,
+      grantType,
+      redirectUri: redirectUri ? redirectUri.split('?')[0].slice(0, 200) : undefined,
     });
 
     const params = new URLSearchParams();
-    for (const [key, value] of Object.entries(body)) {
+    for (const [key, value] of Object.entries(rawBody)) {
       if (typeof value === 'string') {
         params.set(key, value);
       }
     }
 
-    if (clientId && isCimdClientId(clientId)) {
+    const isCimd = !!(clientId && isCimdClientId(clientId));
+
+    if (isCimd) {
       const urlValidation = validateCimdUrl(clientId);
       if (!urlValidation.valid) {
         res.status(400).json({
@@ -96,6 +110,34 @@ async function handleTokenRequest(
       }
 
       params.set('client_id', upstreamClientId);
+    }
+
+    // Redirect URI validation and rewriting for authorization_code grants
+    if (redirectConfig && grantType === 'authorization_code') {
+      if (!redirectUri) {
+        res.status(400).json({
+          error: 'invalid_request',
+          error_description: 'redirect_uri is required for authorization_code grant',
+        });
+        return;
+      }
+
+      if (!isCimd) {
+        const match = matchesRedirectPattern(redirectUri, redirectConfig.allowedRedirectUris);
+        if (!match.allowed) {
+          logger.debug('token proxy: redirect_uri rejected', {
+            reason: match.reason,
+            uri: redirectUri.slice(0, 200),
+          });
+          res.status(400).json({
+            error: 'invalid_request',
+            error_description: 'redirect_uri not allowed',
+          });
+          return;
+        }
+      }
+
+      params.set('redirect_uri', `${redirectConfig.baseUrl}/authorize/callback`);
     }
 
     const upstreamUrl = getUpstreamTokenEndpoint();

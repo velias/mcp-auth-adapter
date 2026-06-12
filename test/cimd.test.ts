@@ -51,12 +51,12 @@ describe('validateCimdUrl', () => {
 
   it('rejects URL with username', () => {
     const result = validateCimdUrl('https://user@cursor.com/oauth-client.json');
-    expect(result).toEqual({ valid: false, reason: 'must not contain username or password' });
+    expect(result).toEqual({ valid: false, reason: 'must not contain userinfo' });
   });
 
   it('rejects URL with username and password', () => {
     const result = validateCimdUrl('https://user:pass@cursor.com/oauth-client.json');
-    expect(result).toEqual({ valid: false, reason: 'must not contain username or password' });
+    expect(result).toEqual({ valid: false, reason: 'must not contain userinfo' });
   });
 
   it('rejects URL with query string', () => {
@@ -66,7 +66,7 @@ describe('validateCimdUrl', () => {
 
   it('rejects invalid URL', () => {
     const result = validateCimdUrl('not-a-url');
-    expect(result).toEqual({ valid: false, reason: 'not a valid URL' });
+    expect(result).toEqual({ valid: false, reason: 'not a valid URI' });
   });
 
   it('accepts deep path', () => {

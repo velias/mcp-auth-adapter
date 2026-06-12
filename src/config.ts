@@ -16,6 +16,10 @@ export interface AppConfig {
   cimdEnabled: boolean;
   metricsEnabled: boolean;
   shutdownTimeoutSeconds: number;
+  authStateSecret?: Buffer;
+  authStateSecretPrevious?: Buffer;
+  authStateTtlSeconds: number;
+  allowedRedirectUris: string[];
 }
 
 function requireEnv(name: string): string {
@@ -66,6 +70,54 @@ function parseScopesEnv(name: string): string[] | undefined {
   if (!raw) return undefined;
   const scopes = raw.split(',').map((s) => s.trim()).filter(Boolean);
   return scopes.length > 0 ? scopes : undefined;
+}
+
+const HEX_RE = /^[0-9a-fA-F]+$/;
+
+function parseHexSecretEnv(name: string, required: false): Buffer | undefined;
+function parseHexSecretEnv(name: string, required: true): Buffer;
+function parseHexSecretEnv(name: string, required: boolean): Buffer | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    if (required) {
+      throw new Error(
+        `Missing required environment variable: ${name}. Generate with: openssl rand -hex 32`,
+      );
+    }
+    return undefined;
+  }
+  if (!HEX_RE.test(raw)) {
+    throw new Error(
+      `${name} must be a hex-encoded string (only 0-9, a-f, A-F). Generate with: openssl rand -hex 32`,
+    );
+  }
+  if (raw.length % 2 !== 0) {
+    throw new Error(
+      `${name} must have even length (complete bytes). Got ${raw.length} characters.`,
+    );
+  }
+  const decoded = Buffer.from(raw, 'hex');
+  if (decoded.length < 32) {
+    throw new Error(
+      `${name} must be at least 32 bytes (64 hex chars). Got ${decoded.length} bytes. Generate with: openssl rand -hex 32`,
+    );
+  }
+  return decoded;
+}
+
+function parseAllowedRedirectUris(name: string): string[] {
+  const raw = process.env[name];
+  if (!raw || raw.trim() === '') return [];
+  const patterns = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  for (const pattern of patterns) {
+    const testUri = pattern.endsWith('*') ? pattern.slice(0, -1) : pattern;
+    if (!testUri.includes('://')) {
+      throw new Error(
+        `${name} contains invalid pattern "${pattern}": must include scheme (e.g. http://, https://, cursor://)`,
+      );
+    }
+  }
+  return patterns;
 }
 
 function parseCimdMap(name: string): Record<string, string> {
@@ -126,10 +178,35 @@ export function loadConfig(): AppConfig {
   const authScopesRemoved = parseScopesEnv('MCP_PROXY_AUTH_SCOPES_REMOVED');
   const authScopesPreserved = parseScopesEnv('MCP_PROXY_AUTH_SCOPES_PRESERVED');
 
+  // Parse state secret early to determine proxyAuthEndpoint activation
+  const hasStateSecret = !!process.env.MCP_PROXY_AUTH_STATE_SECRET?.trim();
+
   // /authorize proxy auto-enables when any feature that needs it is configured
   const proxyAuthEndpoint = cimdEnabled
     || authScopesRemoved !== undefined
-    || authScopesPreserved !== undefined;
+    || authScopesPreserved !== undefined
+    || hasStateSecret;
+
+  // State secret is required when authorize proxy is active
+  let authStateSecret: Buffer | undefined;
+  if (proxyAuthEndpoint) {
+    authStateSecret = parseHexSecretEnv('MCP_PROXY_AUTH_STATE_SECRET', true);
+  }
+
+  const authStateSecretPrevious = parseHexSecretEnv('MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS', false);
+  const authStateTtlMinutes = parseIntEnv('MCP_PROXY_AUTH_STATE_TTL_MINUTES', 30, 1);
+
+  const allowedRedirectUris = parseAllowedRedirectUris('MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS');
+
+  // Require allowed redirect URIs when authorize proxy is active unless CIMD-only
+  // (CIMD-only = CIMD enabled without DCR; CIMD validates redirect URIs via metadata docs)
+  const cimdOnly = cimdEnabled && !proxyDcrEndpoint;
+  if (proxyAuthEndpoint && allowedRedirectUris.length === 0 && !cimdOnly) {
+    throw new Error(
+      'MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS is required when the authorize proxy is active. ' +
+      'Specify comma-separated allowed redirect URI patterns (trailing * for prefix match).',
+    );
+  }
 
   return {
     baseUrl: requireUrlEnv('MCP_BASE_URL'),
@@ -149,5 +226,9 @@ export function loadConfig(): AppConfig {
     cimdEnabled,
     metricsEnabled: parseBoolEnv('MCP_METRICS_ENABLED', true),
     shutdownTimeoutSeconds: parseIntEnv('MCP_SHUTDOWN_TIMEOUT_SECONDS', 30),
+    authStateSecret,
+    authStateSecretPrevious,
+    authStateTtlSeconds: authStateTtlMinutes * 60,
+    allowedRedirectUris,
   };
 }
