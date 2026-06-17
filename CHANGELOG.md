@@ -5,7 +5,7 @@ This file is auto-generated from [GitHub Releases](https://github.com/velias/mcp
 
 ---
 
-## [v2.0.0](https://github.com/velias/mcp-auth-adapter/releases/tag/v2.0.0) — 2026-06-11
+## [v2.0.0](https://github.com/velias/mcp-auth-adapter/releases/tag/v2.0.0) — 2026-06-12
 
 ### BREAKING CHANGES
 * `MCP_PROXY_AUTH_STATE_SECRET` is now required when the authorize proxy is active (scope filtering, CIMD, or standalone iss interception). Existing deployments must add this variable — generate with `openssl rand -hex 32`.
