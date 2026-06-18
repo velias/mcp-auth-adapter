@@ -271,7 +271,7 @@ The token proxy forwards all request parameters to the upstream IdP without modi
 
 ### Discovery
 
-The adapter includes `client_credentials` in `grant_types_supported` in its well-known metadata. The `token_endpoint_auth_methods_supported` field passes through from the upstream IdP — if the upstream advertises `client_secret_post`, `client_secret_basic`, or `private_key_jwt`, clients will discover them.
+The adapter includes `client_credentials` in `grant_types_supported` in its well-known metadata (both in the fallback document and as a default when the upstream omits the field). The `token_endpoint_auth_methods_supported` field passes through from the upstream IdP — if the upstream advertises `client_secret_post`, `client_secret_basic`, or `private_key_jwt`, clients will discover them. The fallback document (used when the upstream cannot be reached) includes `client_secret_basic`, `client_secret_post`, and `none`.
 
 ### JWT Bearer Assertion `aud` Caveat
 

@@ -368,6 +368,22 @@ describe('Well-Known Discovery Endpoints', () => {
       expect(defaults.code_challenge_methods_supported).toEqual(['S256']);
     });
 
+    it('includes client_credentials in grant_types_supported', () => {
+      const defaults = buildDefaultUpstreamDoc('https://sso.example.com/auth/realms/test');
+
+      expect(defaults.grant_types_supported).toContain('client_credentials');
+      expect(defaults.grant_types_supported).toContain('authorization_code');
+      expect(defaults.grant_types_supported).toContain('refresh_token');
+    });
+
+    it('includes client_secret_post in token_endpoint_auth_methods_supported', () => {
+      const defaults = buildDefaultUpstreamDoc('https://sso.example.com/auth/realms/test');
+
+      expect(defaults.token_endpoint_auth_methods_supported).toContain('client_secret_post');
+      expect(defaults.token_endpoint_auth_methods_supported).toContain('client_secret_basic');
+      expect(defaults.token_endpoint_auth_methods_supported).toContain('none');
+    });
+
     it('produces a working well-known document when used as upstream', async () => {
       const defaults = buildDefaultUpstreamDoc('https://sso.example.com/auth/realms/test');
       const app = makeApp(makeConfig(), defaults);
