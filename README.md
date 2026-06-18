@@ -535,6 +535,10 @@ Detailed interaction between different components when MCP Authentication happen
 
 <img src="docs/mcp_auth_adapter_flow_cimd_scopesfiltering.png" alt="Flow diagram with CIMD, RFC 9207 iss interception, and scopes filtering" width="1024">
 
+### Client Credentials passthrough
+
+<img src="docs/mcp_auth_adapter_flow_client_credentials.png" alt="Flow diagram with Client Credentials passthrough" width="1024">
+
 ## Security
 
 An [OWASP Top 10 security review](docs/owasp-security-review-2026-05-15.md) was performed on 2026-05-15. No critical issues were found.
