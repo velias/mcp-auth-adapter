@@ -16,6 +16,7 @@ MCP servers [announce this adapter as their authorization server](https://modelc
 
 - **MCP Authorization Specification 2025-11-25** — v1.0 fully compatible
 - **MCP Authorization Specification 2026-07-28 RC** — v2.0 fully compatible (adds mandatory RFC 9207 `iss` parameter validation)
+- **[MCP OAuth Client Credentials extension](https://modelcontextprotocol.io/extensions/auth/oauth-client-credentials)** — supported in v2.1 (passthrough to upstream IdP)
 
 ### Features
 
@@ -300,6 +301,8 @@ Every `client_id` used by this adapter (both the DCR client and each CIMD-mapped
 | Consent | **Enabled (required)** | User consent is the primary security control -- it lets users see which application is requesting access and decide whether to grant it |
 | Standard flow | Enabled | Authorization code flow is the only flow used by MCP clients |
 | Allowed scopes | | Must cover all the scopes required by MCP servers using this adapter, mainly those requiring pre-approval |
+
+**Note on Client Credentials**: The table above applies to interactive MCP clients (authorization code flow). For machine-to-machine access via the [Client Credentials passthrough](#client-credentials-passthrough), separate **confidential** clients must be registered at the upstream IdP — one per calling system — with `client_credentials` grant enabled. Each system receives its own `client_id` and `client_secret` (or key pair for `private_key_jwt`). These clients are managed entirely outside the adapter — the adapter simply proxies token requests to the upstream IdP.
 
 #### Redirect URIs at the upstream IdP
 
