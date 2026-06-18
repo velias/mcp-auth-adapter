@@ -240,18 +240,20 @@ MCP_PROXY_CIMD_DEFAULT_CLIENT_ID=generic-mcp-client
 
 ## Token Issuer Validation
 
-> **Note**: The RFC 9207 `iss` parameter in authorization responses is handled correctly (the adapter rewrites it). The caveat below applies to JWT `iss` claims inside **tokens**, which is a separate concern.
+> **Note**: The RFC 9207 `iss` parameter in authorization responses is handled correctly. The caveat below applies to JWT `iss` claims inside **tokens**, which is a separate concern.
 
-This adapter rewrites `issuer` in well-known metadata to its own `MCP_BASE_URL`, but tokens are issued by the **upstream IdP** — their JWT `iss` claim contains the upstream IdP URL.
+This adapter rewrites `issuer` in well-known discovery metadata to its own `MCP_BASE_URL`, but tokens are issued by the **upstream IdP** — they are signed by upstream IdP signature, and their JWT `iss` claim (if upstream IdP issues JWT tokens) contains the upstream IdP issuer.
 
 **MCP servers and clients must not validate the access token JWT `iss` claim against this adapter's discovery `issuer`.**
 
-In practice this is not a problem. Most OAuth libraries validate tokens via JWKS signature verification, not by comparing the JWT `iss` against discovery metadata. MCP servers typically treat access tokens as opaque or verify them via introspection. All major MCP clients we tested work correctly.
+In practice this is not a problem. Most OAuth libraries primarily validate tokens via JWKS signature verification, not by comparing the JWT `iss` claim against discovery metadata.
 
-If explicit token validation is needed:
+All major MCP clients we tested work correctly.
 
-1. **JWKS signature verification (recommended)** — the adapter's `jwks_uri` points to the upstream IdP's JWKS, so signature verification cryptographically proves the token's origin.
-2. **Validate `iss` against the upstream IdP URL** — configure the MCP server with `MCP_UPSTREAM_SSO_URL`, not `MCP_BASE_URL`.
+Token validation in the MCP Server:
+
+1. **JWKS signature verification** — the adapter's discovery metadata `jwks_uri` points to the upstream IdP's JWKS, so signature verification cryptographically proves the token's origin correctly. Discovery metadata can, and should, be used here to get `jwks_uri`. This is OAuth compliant token origin verification behaviour.
+2. **Validate `iss` claim against the upstream IdP URL** — JWT `iss` claim validation is required by the OIDC spec. If you want this behaviour, explicitly configure the MCP server with **upstream IdP issuer** and validate against this configuration, do not validate against `issuer` from the discovery metadata.
 
 ## Deployment Notes
 
