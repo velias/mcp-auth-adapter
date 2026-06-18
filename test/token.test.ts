@@ -480,4 +480,192 @@ describe('POST /token (Token Proxy)', () => {
       expect(body.get('redirect_uri')).toBe('http://localhost:3000/authorize/callback');
     });
   });
+
+  describe('client_credentials grant', () => {
+    it('forwards client_secret_post params to upstream', async () => {
+      mockUpstreamTokenResponse({ body: { access_token: 'cc_tok', token_type: 'Bearer', expires_in: 300 } });
+      const app = createTestApp();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'client_credentials',
+          client_id: 'my-service',
+          client_secret: 's3cr3t',
+          scope: 'read write',
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.access_token).toBe('cc_tok');
+      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const sentBody = new URLSearchParams(fetchCall[1].body as string);
+      expect(sentBody.get('grant_type')).toBe('client_credentials');
+      expect(sentBody.get('client_id')).toBe('my-service');
+      expect(sentBody.get('client_secret')).toBe('s3cr3t');
+      expect(sentBody.get('scope')).toBe('read write');
+    });
+
+    it('forwards Authorization header for non-CIMD client (client_secret_basic)', async () => {
+      mockUpstreamTokenResponse({ body: { access_token: 'basic_tok', token_type: 'Bearer' } });
+      const app = createTestApp();
+      const basicAuth = 'Basic ' + Buffer.from('my-service:s3cr3t').toString('base64');
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .set('Authorization', basicAuth)
+        .send({
+          grant_type: 'client_credentials',
+          scope: 'read',
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      expect(fetchCall[1].headers['Authorization']).toBe(basicAuth);
+    });
+
+    it('does NOT forward Authorization header for CIMD client_id', async () => {
+      mockUpstreamTokenResponse({ body: { access_token: 'cimd_tok', token_type: 'Bearer' } });
+      const app = createTestApp({ defaultClientId: 'generic-client' });
+      const basicAuth = 'Basic ' + Buffer.from('fake:creds').toString('base64');
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .set('Authorization', basicAuth)
+        .send({
+          grant_type: 'client_credentials',
+          client_id: 'https://cursor.com/oauth-client.json',
+          scope: 'read',
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      expect(fetchCall[1].headers['Authorization']).toBeUndefined();
+    });
+
+    it('does not require redirect_uri', async () => {
+      mockUpstreamTokenResponse({ body: { access_token: 'tok', token_type: 'Bearer' } });
+      const app = createTestApp();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'client_credentials',
+          client_id: 'my-service',
+          client_secret: 's3cr3t',
+        });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('relays upstream error transparently', async () => {
+      mockUpstreamTokenResponse({
+        status: 401,
+        body: { error: 'invalid_client', error_description: 'Bad credentials' },
+      });
+      const app = createTestApp();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'client_credentials',
+          client_id: 'bad-service',
+          client_secret: 'wrong',
+        });
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe('invalid_client');
+    });
+  });
+
+  describe('JWT bearer assertion grant', () => {
+    it('forwards urn:ietf:params:oauth:grant-type:jwt-bearer with assertion', async () => {
+      mockUpstreamTokenResponse({ body: { access_token: 'jwt_tok', token_type: 'Bearer', expires_in: 300 } });
+      const app = createTestApp();
+      const jwtAssertion = 'eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJteS1zZXJ2aWNlIn0.signature';
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+          assertion: jwtAssertion,
+          scope: 'read write',
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.access_token).toBe('jwt_tok');
+      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const sentBody = new URLSearchParams(fetchCall[1].body as string);
+      expect(sentBody.get('grant_type')).toBe('urn:ietf:params:oauth:grant-type:jwt-bearer');
+      expect(sentBody.get('assertion')).toBe(jwtAssertion);
+      expect(sentBody.get('scope')).toBe('read write');
+    });
+  });
+
+  describe('Authorization header forwarding', () => {
+    it('forwards Authorization header for non-CIMD authorization_code grant', async () => {
+      mockUpstreamTokenResponse({ body: { access_token: 'at', token_type: 'Bearer' } });
+      const app = createTestApp();
+      const basicAuth = 'Basic ' + Buffer.from('confidential-client:secret').toString('base64');
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .set('Authorization', basicAuth)
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'confidential-client',
+          code: 'auth-code',
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      expect(fetchCall[1].headers['Authorization']).toBe(basicAuth);
+    });
+
+    it('forwards Authorization header for non-CIMD refresh_token grant', async () => {
+      mockUpstreamTokenResponse({ body: { access_token: 'new_at', token_type: 'Bearer' } });
+      const app = createTestApp();
+      const basicAuth = 'Basic ' + Buffer.from('confidential-client:secret').toString('base64');
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .set('Authorization', basicAuth)
+        .send({
+          grant_type: 'refresh_token',
+          client_id: 'confidential-client',
+          refresh_token: 'rt-abc',
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      expect(fetchCall[1].headers['Authorization']).toBe(basicAuth);
+    });
+
+    it('does not forward Authorization header for CIMD refresh_token grant', async () => {
+      mockUpstreamTokenResponse({ body: { access_token: 'at', token_type: 'Bearer' } });
+      const app = createTestApp({ defaultClientId: 'generic' });
+      const basicAuth = 'Basic ' + Buffer.from('fake:creds').toString('base64');
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .set('Authorization', basicAuth)
+        .send({
+          grant_type: 'refresh_token',
+          client_id: 'https://cursor.com/oauth-client.json',
+          refresh_token: 'rt-abc',
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      expect(fetchCall[1].headers['Authorization']).toBeUndefined();
+    });
+  });
 });

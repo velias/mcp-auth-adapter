@@ -24,6 +24,7 @@ MCP servers [announce this adapter as their authorization server](https://modelc
 - **Scope filtering during authentication** (`GET /authorize`, optional) - intercepts authorization requests to modify scopes and redirect to the upstream IdP.
 - **RFC 9207 `iss` parameter validation** - mandatory authorization response issuer verification, which prevents OAuth mix-up attacks per the MCP Auth Spec (2026-07-28 RC). The adapter intercepts upstream authorization responses and rewrites the `iss` parameter so MCP clients see a consistent issuer matching the adapter's well-known metadata. See [RFC 9207 iss parameter validation](#rfc-9207-iss-parameter-validation).
 - **CIMD adapter** (`GET /authorize` + `POST /token`, EXPERIMENTAL, optional) - accepts [Client ID Metadata Document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) style `client_id` URLs, validates metadata documents, and maps them to pre-configured fixed upstream IdP client_ids. See [CIMD Adapter](#cimd-adapter-experimental).
+- **Client Credentials passthrough** (`POST /token`) - transparently proxies OAuth 2.0 client credentials requests (`grant_type=client_credentials`) and JWT bearer assertions to the upstream IdP, supporting the [MCP OAuth Client Credentials extension](https://modelcontextprotocol.io/extensions/auth/oauth-client-credentials). Supports both `client_secret_post` and `client_secret_basic` authentication methods. Requires the upstream IdP to advertise `client_credentials` in `grant_types_supported`.
 
 See [Flow Diagrams](#flow-diagrams) to understand functionality better.
 
@@ -255,6 +256,38 @@ Token validation in the MCP Server:
 1. **JWKS signature verification** — the adapter's discovery metadata `jwks_uri` points to the upstream IdP's JWKS, so signature verification cryptographically proves the token's origin correctly. Discovery metadata can, and should, be used here to get `jwks_uri`. This is OAuth compliant token origin verification behaviour.
 2. **Validate `iss` claim against the upstream IdP URL** — JWT `iss` claim validation is required by the OIDC spec. If you want this behaviour, explicitly configure the MCP server with **upstream IdP issuer** and validate against this configuration, do not validate against `issuer` from the discovery metadata.
 
+## Client Credentials Passthrough
+
+The adapter transparently proxies OAuth 2.0 client credentials requests to the upstream IdP, supporting the [MCP OAuth Client Credentials extension](https://modelcontextprotocol.io/extensions/auth/oauth-client-credentials). This enables machine-to-machine authentication for MCP without interactive user authorization.
+
+### Supported credential formats
+
+- **Client Secrets** (`grant_type=client_credentials`) — supports both `client_secret_post` (credentials in the request body) and `client_secret_basic` (credentials in the `Authorization: Basic` header per RFC 6749 §2.3.1).
+- **JWT Bearer Assertions** (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`) — forwards the `assertion` parameter and any `client_assertion`/`client_assertion_type` parameters to the upstream IdP.
+
+### How it works
+
+The token proxy forwards all request parameters to the upstream IdP without modification. No `redirect_uri` validation or rewriting is applied (those only affect `authorization_code` grants). The `Authorization` header is forwarded for non-CIMD requests.
+
+### Discovery
+
+The adapter includes `client_credentials` in `grant_types_supported` in its well-known metadata. The `token_endpoint_auth_methods_supported` field passes through from the upstream IdP — if the upstream advertises `client_secret_post`, `client_secret_basic`, or `private_key_jwt`, clients will discover them.
+
+### JWT Bearer Assertion `aud` Caveat
+
+When using JWT bearer assertions (RFC 7523), the client constructs a signed JWT with an `aud` (audience) claim set to the authorization server's token endpoint URL. Since MCP clients discover this adapter as the authorization server, they set `aud` to `{MCP_BASE_URL}/token`.
+
+When the adapter proxies this assertion to the upstream IdP, the upstream validates `aud` against **its own** token endpoint URL. This mismatch causes the upstream to reject the assertion.
+
+**Workaround 1 (recommended)**: Configure the upstream IdP to accept the adapter's token endpoint URL (`{MCP_BASE_URL}/token`) as a valid audience for JWT client assertions. In Keycloak, this can be configured per-client under "Credentials > Client Authenticator > Signed JWT > Valid Audiences". Other IdPs have similar settings. This is transparent to clients — no client-side changes required.
+
+**Workaround 2**: Configure the client to use the upstream IdP's token endpoint URL directly as the `aud` claim, rather than deriving it from discovery. This is valid per RFC 7523 — the upstream IdP *is* the real authorization server, the adapter is just a proxy. Limitations:
+- Requires the client to have out-of-band knowledge of the upstream IdP's token endpoint URL
+- Standard MCP SDK implementations (e.g. `PrivateKeyJwtProvider`) typically derive `aud` from the discovered `token_endpoint` automatically — overriding this requires using lower level client code
+- Couples the client to the deployment's internal architecture
+
+This limitation is inherent to proxying JWT assertions and does not affect the client secrets flow.
+
 ## Deployment Notes
 
 ### Upstream IdP Client Registration
@@ -455,7 +488,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, linting, 
 The adapter fetches the upstream IdP's discovery document at startup (trying OIDC and RFC 8414 paths) but only exposes a strict whitelist of fields relevant to MCP. See [Well-Known Field Filtering](#well-known-field-filtering) for details.
 
 - **Discovery fallback chain**: The adapter tries `/.well-known/openid-configuration` first, then `/.well-known/oauth-authorization-server` (RFC 8414). If both fail, endpoints are derived from `MCP_UPSTREAM_SSO_URL` using Keycloak URL conventions (e.g. `{issuer}/protocol/openid-connect/auth`). **This last-resort fallback is Keycloak-specific** - for other IdPs the derived URLs will be incorrect. Capability fields default to safe minimums (e.g. `code_challenge_methods_supported: ["S256"]`).
-- **Flow-level defaults**: When the upstream provides `authorization_endpoint` and `token_endpoint` but omits flow fields, the adapter injects: `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code"]`, `code_challenge_methods_supported: ["S256"]`. Existing upstream values are never overridden.
+- **Flow-level defaults**: When the upstream provides `authorization_endpoint` and `token_endpoint` but omits flow fields, the adapter injects: `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code", "client_credentials"]`, `code_challenge_methods_supported: ["S256"]`. Existing upstream values are never overridden.
 - **Periodic refresh**: Re-fetches at the configured interval (default: 60 min). On success, the new document is used immediately. On failure, the previous document is kept.
 - **Compatibility validation**: At startup and on each periodic refresh, the adapter validates the upstream document and logs `Upstream IdP compatibility:` warnings for:
   - Missing `authorization_endpoint` or `token_endpoint` (MCP authorization flow will not work).
@@ -483,7 +516,7 @@ The adapter only exposes a strict whitelist of upstream fields. New upstream fie
 | `client_id_metadata_document_supported` | CIMD enabled | Set to `true` |
 | `scopes_supported` | `MCP_WELL_KNOWN_SCOPES_SUPPORTED` set | Replaced with configured value; omitted if empty |
 | `response_types_supported` | Upstream omits + auth flow present | Defaults to `["code"]` |
-| `grant_types_supported` | Upstream omits + auth flow present | Defaults to `["authorization_code"]` |
+| `grant_types_supported` | Upstream omits + auth flow present | Defaults to `["authorization_code", "client_credentials"]` |
 | `code_challenge_methods_supported` | Upstream omits + auth flow present | Defaults to `["S256"]` |
 
 #### Excluded fields

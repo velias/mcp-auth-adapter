@@ -20,7 +20,7 @@ export function buildDefaultUpstreamDoc(issuerUrl: string): Record<string, unkno
     registration_endpoint: `${issuerUrl}/clients-registrations/openid-connect`,
     response_types_supported: ['code'],
     response_modes_supported: ['query', 'fragment'],
-    grant_types_supported: ['authorization_code', 'refresh_token'],
+    grant_types_supported: ['authorization_code', 'refresh_token', 'client_credentials'],
     token_endpoint_auth_methods_supported: ['client_secret_basic', 'none'],
     token_endpoint_auth_signing_alg_values_supported: ['RS256'],
     code_challenge_methods_supported: ['S256'],
@@ -78,7 +78,7 @@ export function buildWellKnownDocument(
       doc.response_types_supported = ['code'];
     }
     if (!doc.grant_types_supported) {
-      doc.grant_types_supported = ['authorization_code'];
+      doc.grant_types_supported = ['authorization_code', 'client_credentials'];
     }
     if (!doc.code_challenge_methods_supported) {
       doc.code_challenge_methods_supported = ['S256'];
