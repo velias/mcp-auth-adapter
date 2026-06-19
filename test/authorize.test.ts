@@ -32,6 +32,8 @@ const CONFIG: AppConfig = {
   authStateSecret: TEST_STATE_SECRET,
   authStateTtlSeconds: 1800,
   allowedRedirectUris: ['http://localhost:*', 'http://127.0.0.1:*'],
+  requireResource: false,
+  allowedResources: [],
 };
 
 function makeApp(configOverrides: Partial<AppConfig> = {}) {
@@ -606,5 +608,171 @@ describe('createApp startup guards', () => {
         upstreamDoc: docWithoutToken,
       }),
     ).toThrow(/missing token_endpoint/);
+  });
+});
+
+describe('GET /authorize (resource parameter)', () => {
+  it('passes through valid resource parameter to upstream', async () => {
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'my-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+        resource: 'https://mcp.example.com',
+      });
+
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.location);
+    expect(location.searchParams.get('resource')).toBe('https://mcp.example.com');
+  });
+
+  it('passes through when resource is absent (default: no enforcement)', async () => {
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'my-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+      });
+
+    expect(res.status).toBe(302);
+  });
+
+  it('rejects resource with custom scheme (cursor://)', async () => {
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'my-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+        resource: 'cursor://foo/bar',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_request');
+    expect(res.body.error_description).toContain('resource');
+  });
+
+  it('rejects resource with fragment', async () => {
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'my-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+        resource: 'https://mcp.example.com#frag',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_request');
+    expect(res.body.error_description).toContain('resource');
+  });
+
+  describe('require enforcement (requireResource: true)', () => {
+    it('rejects request missing resource', async () => {
+      const app = makeApp({ requireResource: true });
+
+      const res = await request(app)
+        .get('/authorize')
+        .query({
+          client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
+          response_type: 'code',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+      expect(res.body.error_description).toContain('resource');
+      expect(res.body.error_description).toContain('RFC 8707');
+    });
+
+    it('rejects request with empty resource', async () => {
+      const app = makeApp({ requireResource: true });
+
+      const res = await request(app)
+        .get('/authorize')
+        .query({
+          client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
+          response_type: 'code',
+          resource: '',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+    });
+
+    it('passes when valid resource is present', async () => {
+      const app = makeApp({ requireResource: true });
+
+      const res = await request(app)
+        .get('/authorize')
+        .query({
+          client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
+          response_type: 'code',
+          resource: 'https://mcp.example.com',
+        });
+
+      expect(res.status).toBe(302);
+    });
+  });
+
+  describe('allowlist enforcement', () => {
+    it('passes matching resource', async () => {
+      const app = makeApp({ allowedResources: ['https://mcp.example.com/*'] });
+
+      const res = await request(app)
+        .get('/authorize')
+        .query({
+          client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
+          response_type: 'code',
+          resource: 'https://mcp.example.com/v1/tools',
+        });
+
+      expect(res.status).toBe(302);
+    });
+
+    it('rejects non-matching resource', async () => {
+      const app = makeApp({ allowedResources: ['https://mcp.example.com/*'] });
+
+      const res = await request(app)
+        .get('/authorize')
+        .query({
+          client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
+          response_type: 'code',
+          resource: 'https://other.example.com/mcp',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+      expect(res.body.error_description).toBe('resource not allowed');
+    });
+
+    it('passes exact match', async () => {
+      const app = makeApp({ allowedResources: ['https://mcp.example.com/mcp'] });
+
+      const res = await request(app)
+        .get('/authorize')
+        .query({
+          client_id: 'my-client',
+          redirect_uri: 'http://localhost:8080/callback',
+          response_type: 'code',
+          resource: 'https://mcp.example.com/mcp',
+        });
+
+      expect(res.status).toBe(302);
+    });
   });
 });

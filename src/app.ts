@@ -6,7 +6,7 @@ import { createMetricsRegistry, IMetricsRegistry } from './metrics';
 import { createHttpMetricsMiddleware, HttpMetrics } from './middleware/metrics';
 import { buildWellKnownDocument, createWellKnownRouter } from './routes/well-known';
 import { createRegisterRouter } from './routes/register';
-import { createAuthorizeRouter, AuthCimdConfig } from './routes/authorize';
+import { createAuthorizeRouter } from './routes/authorize';
 import { createAuthorizeCallbackRouter } from './routes/authorize-callback';
 import { createHealthRouter } from './routes/health';
 import { createMetricsRouter } from './routes/metrics';
@@ -106,7 +106,8 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
     else app.use(registerRouter);
   }
 
-  let cimdConfig: AuthCimdConfig | undefined;
+  let cimdResolve: ((cimdUrl: string) => string | null) | undefined;
+  let cimdValidateAndCache: ((cimdUrl: string) => Promise<import('./cimd').CimdDocument>) | undefined;
 
   if (config.cimdEnabled) {
     const pinnedUrls = new Set(Object.keys(config.cimdMap));
@@ -117,10 +118,8 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
     });
 
     const fetcher = cimdFetcher ?? fetchCimdDocument;
-    cimdConfig = {
-      resolve: (cimdUrl: string) => resolveUpstreamClientId(cimdUrl, config.cimdMap, config.cimdDefaultClientId),
-      validateAndCache: (cimdUrl: string) => cimdCache.get(cimdUrl, fetcher),
-    };
+    cimdResolve = (cimdUrl: string) => resolveUpstreamClientId(cimdUrl, config.cimdMap, config.cimdDefaultClientId);
+    cimdValidateAndCache = (cimdUrl: string) => cimdCache.get(cimdUrl, fetcher);
   }
 
   if (config.proxyAuthEndpoint) {
@@ -131,20 +130,19 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
       throw new Error('Upstream well-known document is missing token_endpoint');
     }
 
-    const stateConfig = config.authStateSecret ? {
-      baseUrl: config.baseUrl,
-      secret: config.authStateSecret,
-      ttlSeconds: config.authStateTtlSeconds,
-      allowedRedirectUris: config.allowedRedirectUris,
-    } : undefined;
-
-    const authorizeRouter = createAuthorizeRouter(
-      () => state.upstreamAuthorizationEndpoint,
-      logger,
-      { removed: config.authScopesRemoved, preserved: config.authScopesPreserved },
-      cimdConfig,
-      stateConfig,
-    );
+    const authorizeRouter = createAuthorizeRouter({
+      getUpstreamAuthEndpoint: () => state.upstreamAuthorizationEndpoint,
+      removed: config.authScopesRemoved,
+      preserved: config.authScopesPreserved,
+      requireResource: config.requireResource,
+      allowedResources: config.allowedResources,
+      cimdResolve,
+      cimdValidateAndCache,
+      stateBaseUrl: config.authStateSecret ? config.baseUrl : undefined,
+      stateSecret: config.authStateSecret,
+      stateTtlSeconds: config.authStateTtlSeconds,
+      stateAllowedRedirectUris: config.authStateSecret ? config.allowedRedirectUris : undefined,
+    }, logger);
     if (metricsMiddleware) app.use(metricsMiddleware, authorizeRouter);
     else app.use(authorizeRouter);
 
@@ -167,16 +165,16 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
     }
 
     // Token proxy (unified — always active when authorize proxy is active)
-    const tokenRouter = createTokenRouter(
-      () => state.upstreamTokenEndpoint,
-      { map: config.cimdMap, defaultClientId: config.cimdDefaultClientId },
-      logger,
+    const tokenRouter = createTokenRouter({
+      getUpstreamTokenEndpoint: () => state.upstreamTokenEndpoint,
+      cimdMap: config.cimdMap,
+      cimdDefaultClientId: config.cimdDefaultClientId,
       metricsRegistry,
-      config.authStateSecret ? {
-        baseUrl: config.baseUrl,
-        allowedRedirectUris: config.allowedRedirectUris,
-      } : undefined,
-    );
+      redirectBaseUrl: config.authStateSecret ? config.baseUrl : undefined,
+      redirectAllowedUris: config.authStateSecret ? config.allowedRedirectUris : undefined,
+      requireResource: config.requireResource,
+      allowedResources: config.allowedResources,
+    }, logger);
     if (metricsMiddleware) app.use(metricsMiddleware, tokenRouter);
     else app.use(tokenRouter);
   }

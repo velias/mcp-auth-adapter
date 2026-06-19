@@ -189,6 +189,8 @@ const BASE_CONFIG: AppConfig = {
   shutdownTimeoutSeconds: 30,
   authStateTtlSeconds: 1800,
   allowedRedirectUris: ['http://localhost:*'],
+  requireResource: false,
+  allowedResources: [],
 };
 
 describe('/metrics endpoint', () => {

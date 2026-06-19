@@ -3,34 +3,30 @@ import express from 'express';
 import { Logger, requestMeta } from '../logger';
 import { readResponseWithLimit } from '../fetch-utils';
 import { isCimdClientId, validateCimdUrl, resolveUpstreamClientId, sanitizeForError } from '../cimd';
-import { matchesRedirectPattern } from '../uri-validation';
+import { matchesRedirectPattern, checkResourceParam, ResourceConfig } from '../uri-validation';
 import { IMetricsRegistry, ICounter, IHistogram } from '../metrics';
 
 const TOKEN_UPSTREAM_TIMEOUT_MS = 10000;
 const TOKEN_UPSTREAM_MAX_RESPONSE_BYTES = 64 * 1024;
 const RELAY_HEADERS = ['content-type', 'cache-control', 'pragma'];
 
-export interface TokenCimdResolver {
-  map: Record<string, string>;
-  defaultClientId?: string;
-}
-
-export interface TokenRedirectConfig {
-  baseUrl: string;
-  allowedRedirectUris: string[];
+export interface TokenRouterConfig extends ResourceConfig {
+  getUpstreamTokenEndpoint: () => string;
+  cimdMap: Record<string, string>;
+  cimdDefaultClientId?: string;
+  metricsRegistry?: IMetricsRegistry;
+  redirectBaseUrl?: string;
+  redirectAllowedUris?: string[];
 }
 
 export function createTokenRouter(
-  getUpstreamTokenEndpoint: () => string,
-  cimdResolver: TokenCimdResolver,
+  config: TokenRouterConfig,
   logger: Logger,
-  metricsRegistry?: IMetricsRegistry,
-  redirectConfig?: TokenRedirectConfig,
 ): Router {
   const router = Router();
 
-  const upstreamDuration = metricsRegistry?.createHistogram('mcp_auth_token_proxy_upstream_duration_seconds', 'Token proxy upstream request duration in seconds');
-  const upstreamStatus = metricsRegistry?.createCounter('mcp_auth_token_proxy_upstream_status_total', 'Token proxy upstream response status codes');
+  const upstreamDuration = config.metricsRegistry?.createHistogram('mcp_auth_token_proxy_upstream_duration_seconds', 'Token proxy upstream request duration in seconds');
+  const upstreamStatus = config.metricsRegistry?.createCounter('mcp_auth_token_proxy_upstream_status_total', 'Token proxy upstream response status codes');
 
   const urlencodedParser = express.urlencoded({ extended: false, limit: '16kb' });
 
@@ -45,7 +41,7 @@ export function createTokenRouter(
     }
     next();
   }, urlencodedParser, async (req: Request, res: Response) => {
-    await handleTokenRequest(req, res, getUpstreamTokenEndpoint, cimdResolver, logger, upstreamDuration, upstreamStatus, redirectConfig);
+    await handleTokenRequest(req, res, config, logger, upstreamDuration, upstreamStatus);
   });
 
   return router;
@@ -54,12 +50,10 @@ export function createTokenRouter(
 async function handleTokenRequest(
   req: Request,
   res: Response,
-  getUpstreamTokenEndpoint: () => string,
-  cimdResolver: TokenCimdResolver,
+  config: TokenRouterConfig,
   logger: Logger,
   upstreamDuration?: IHistogram,
   upstreamStatusCounter?: ICounter,
-  redirectConfig?: TokenRedirectConfig,
 ): Promise<void> {
   try {
     const rawBody = req.body as Record<string, unknown>;
@@ -67,13 +61,27 @@ async function handleTokenRequest(
     const clientId = str(rawBody.client_id);
     const grantType = str(rawBody.grant_type);
     const redirectUri = str(rawBody.redirect_uri);
+    const resource = str(rawBody.resource);
 
     logger.debug('token proxy request', {
       ...requestMeta(req),
       clientId: clientId.startsWith('https://') ? clientId.slice(0, 80) : clientId,
       grantType,
       redirectUri: redirectUri ? redirectUri.split('?')[0].slice(0, 200) : undefined,
+      resource: resource || 'MISSING',
     });
+
+    // RFC 8707 resource parameter validation (skip for refresh_token per RFC 8707 §2.2)
+    if (grantType !== 'refresh_token') {
+      const resourceError = checkResourceParam(resource, config);
+      if (resourceError) {
+        res.status(400).json({
+          error: 'invalid_request',
+          error_description: resourceError,
+        });
+        return;
+      }
+    }
 
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(rawBody)) {
@@ -96,8 +104,8 @@ async function handleTokenRequest(
 
       const upstreamClientId = resolveUpstreamClientId(
         clientId,
-        cimdResolver.map,
-        cimdResolver.defaultClientId,
+        config.cimdMap,
+        config.cimdDefaultClientId,
       );
 
       if (!upstreamClientId) {
@@ -113,7 +121,7 @@ async function handleTokenRequest(
     }
 
     // Redirect URI validation and rewriting for authorization_code grants
-    if (redirectConfig && grantType === 'authorization_code') {
+    if (config.redirectBaseUrl && grantType === 'authorization_code') {
       if (!redirectUri) {
         res.status(400).json({
           error: 'invalid_request',
@@ -123,7 +131,7 @@ async function handleTokenRequest(
       }
 
       if (!isCimd) {
-        const match = matchesRedirectPattern(redirectUri, redirectConfig.allowedRedirectUris);
+        const match = matchesRedirectPattern(redirectUri, config.redirectAllowedUris!);
         if (!match.allowed) {
           logger.debug('token proxy: redirect_uri rejected', {
             reason: match.reason,
@@ -137,10 +145,10 @@ async function handleTokenRequest(
         }
       }
 
-      params.set('redirect_uri', `${redirectConfig.baseUrl}/authorize/callback`);
+      params.set('redirect_uri', `${config.redirectBaseUrl}/authorize/callback`);
     }
 
-    const upstreamUrl = getUpstreamTokenEndpoint();
+    const upstreamUrl = config.getUpstreamTokenEndpoint();
     // Forward Authorization header for non-CIMD requests (supports client_secret_basic
     // per RFC 6749 §2.3.1). Skipped for CIMD because client_id is rewritten — the
     // original credentials would be invalid for the upstream IdP's mapped client.

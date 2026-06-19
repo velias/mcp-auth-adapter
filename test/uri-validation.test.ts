@@ -1,4 +1,4 @@
-import { validateRedirectUriSecurity, matchesRedirectPattern } from '../src/uri-validation';
+import { validateRedirectUriSecurity, matchesRedirectPattern, validateResourceUri } from '../src/uri-validation';
 
 describe('validateRedirectUriSecurity', () => {
   it('accepts a valid http URI', () => {
@@ -120,5 +120,63 @@ describe('matchesRedirectPattern', () => {
   it('does not match partial scheme (http:// vs https://)', () => {
     const result = matchesRedirectPattern('https://localhost:8080/cb', PATTERNS);
     expect(result).toEqual({ allowed: false, reason: 'no matching pattern' });
+  });
+});
+
+describe('validateResourceUri', () => {
+  it('accepts valid https URI', () => {
+    const result = validateResourceUri('https://mcp.example.com/mcp');
+    expect(result.valid).toBe(true);
+    if (result.valid) expect(result.parsed.href).toBe('https://mcp.example.com/mcp');
+  });
+
+  it('accepts valid https URI without path', () => {
+    const result = validateResourceUri('https://mcp.example.com');
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts valid https URI with port', () => {
+    const result = validateResourceUri('https://mcp.example.com:8443');
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts http for dev (http://localhost:3000/mcp)', () => {
+    const result = validateResourceUri('http://localhost:3000/mcp');
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects custom schemes (cursor://)', () => {
+    const result = validateResourceUri('cursor://anysphere.cursor-mcp/resource');
+    expect(result).toEqual({ valid: false, reason: 'must use http or https scheme' });
+  });
+
+  it('rejects custom schemes (vscode://)', () => {
+    const result = validateResourceUri('vscode://saoudrizwan.claude-dev/resource');
+    expect(result).toEqual({ valid: false, reason: 'must use http or https scheme' });
+  });
+
+  it('rejects URI with fragment', () => {
+    const result = validateResourceUri('https://mcp.example.com#frag');
+    expect(result).toEqual({ valid: false, reason: 'must not contain a fragment' });
+  });
+
+  it('rejects URI with userinfo', () => {
+    const result = validateResourceUri('https://user:pass@mcp.example.com/mcp');
+    expect(result).toEqual({ valid: false, reason: 'must not contain userinfo' });
+  });
+
+  it('rejects unparseable string', () => {
+    const result = validateResourceUri('not-a-url');
+    expect(result).toEqual({ valid: false, reason: 'not a valid URI' });
+  });
+
+  it('rejects empty string', () => {
+    const result = validateResourceUri('');
+    expect(result).toEqual({ valid: false, reason: 'not a valid URI' });
+  });
+
+  it('rejects control characters', () => {
+    const result = validateResourceUri('https://mcp.example.com/\x00');
+    expect(result).toEqual({ valid: false, reason: 'contains control characters' });
   });
 });

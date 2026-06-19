@@ -17,15 +17,17 @@ MCP servers [announce this adapter as their authorization server](https://modelc
 - **MCP Authorization Specification 2025-11-25** — v1.0 fully compatible
 - **MCP Authorization Specification 2026-07-28 RC** — v2.0 fully compatible (adds mandatory RFC 9207 `iss` parameter validation)
 - **[MCP OAuth Client Credentials extension](https://modelcontextprotocol.io/extensions/auth/oauth-client-credentials)** — supported in v2.1 (passthrough to upstream IdP)
+- **[MCP Enterprise-Managed Authorization extension](https://modelcontextprotocol.io/extensions/auth/enterprise-managed-authorization)** — supported in v2.1 (passthrough to upstream IdP)
 
 ### Features
 
-- **Well-known discovery** (`/.well-known/openid-configuration`, `/.well-known/oauth-authorization-server`) - filtered, MCP-focused view of the upstream IdP metadata with injected adapter endpoints and tailored configurations.
-- **Open Dynamic Client Registration** (`POST /register`, optional) - returns a pre-configured fixed `client_id` for all registering MCP clients per [RFC 7591](https://rfc-editor.org/rfc/rfc7591).
-- **Scope filtering during authentication** (`GET /authorize`, optional) - intercepts authorization requests to modify scopes and redirect to the upstream IdP.
-- **RFC 9207 `iss` parameter validation** - mandatory authorization response issuer verification, which prevents OAuth mix-up attacks per the MCP Auth Spec (2026-07-28 RC). The adapter intercepts upstream authorization responses and rewrites the `iss` parameter so MCP clients see a consistent issuer matching the adapter's well-known metadata. See [RFC 9207 iss parameter validation](#rfc-9207-iss-parameter-validation).
-- **CIMD adapter** (`GET /authorize` + `POST /token`, EXPERIMENTAL, optional) - accepts [Client ID Metadata Document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) style `client_id` URLs, validates metadata documents, and maps them to pre-configured fixed upstream IdP client_ids. See [CIMD Adapter](#cimd-adapter-experimental).
-- **Client Credentials passthrough** (`POST /token`) - transparently proxies OAuth 2.0 client credentials requests (`grant_type=client_credentials`) and JWT bearer assertions to the upstream IdP, supporting the [MCP OAuth Client Credentials extension](https://modelcontextprotocol.io/extensions/auth/oauth-client-credentials). Supports both `client_secret_post` and `client_secret_basic` authentication methods. Requires the upstream IdP to advertise `client_credentials` in `grant_types_supported`.
+- **Well-known discovery** - filtered, MCP-focused view of the upstream IdP metadata with injected adapter endpoints and tailored configurations. See [Upstream Well-Known Handling](#upstream-well-known-handling).
+- **Open Dynamic Client Registration (DCR)** (optional) - returns a pre-configured fixed `client_id` for all registering MCP clients per [RFC 7591](https://rfc-editor.org/rfc/rfc7591). See [Open DCR and its Security Limitations](#open-dcr-and-its-security-limitations).
+- **Scope filtering** (optional) - intercepts authorization requests to modify scopes before redirecting to the upstream IdP.
+- **RFC 9207 `iss` parameter validation** - mandatory authorization response issuer verification preventing OAuth mix-up attacks per the MCP Auth Spec. See [RFC 9207 iss parameter validation](#rfc-9207-iss-parameter-validation).
+- **Resource parameter validation** (optional) - validates the [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) `resource` parameter required by the MCP specification, with configurable enforcement, format checking, and allowlist filtering. See [Resource Parameter Validation (RFC 8707)](#resource-parameter-validation-rfc-8707).
+- **Client Credentials passthrough** - transparently proxies `client_credentials` and JWT bearer grants to the upstream IdP per the [MCP OAuth Client Credentials extension](https://modelcontextprotocol.io/extensions/auth/oauth-client-credentials). See [Client Credentials Passthrough](#client-credentials-passthrough).
+- **CIMD adapter** (EXPERIMENTAL, optional) - accepts [Client ID Metadata Document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) style `client_id` URLs, validates metadata documents, and maps them to upstream IdP client_ids. See [CIMD Adapter](#cimd-adapter-experimental).
 
 See [Flow Diagrams](#flow-diagrams) to understand functionality better.
 
@@ -106,48 +108,26 @@ Environment variables are used. All variables are prefixed with `MCP_`. A `.env`
 | `MCP_PROXY_CIMD_MAP` | No | -- | JSON object mapping CIMD URLs to upstream IdP client_ids. Format: `{"<cimd_url>":"<upstream_client_id>", ...}`. N:1 mapping supported. CIMD auto-enables when this is non-empty or `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID` is set. |
 | `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID` | No | -- | Fallback upstream client_id for CIMD URLs not in the map. If unset, unknown CIMD URLs are rejected with 403 (strict allowlist). |
 | `MCP_PROXY_CIMD_CACHE_MINUTES` | No | `30` | Cache TTL (in minutes) for validated CIMD metadata documents. |
+| | | | **Resource Parameter Validation (RFC 8707)** |
+| `MCP_PROXY_AUTH_REQUIRE_RESOURCE` | No | `false` | Reject `/authorize` and `/token` requests missing the RFC 8707 `resource` parameter. Enable for strict MCP spec compliance; leave disabled if MCP clients don't yet include it. |
+| `MCP_PROXY_AUTH_ALLOWED_RESOURCES` | No | -- | Comma-separated allowed resource URI patterns. Trailing `*` = prefix match, no `*` = exact match. When set, `resource` must match a pattern; unmatched values are rejected with 400. |
 | | | | **Observability** |
 | `MCP_METRICS_ENABLED` | No | `true` | Enable Prometheus metrics endpoint (`GET /metrics`) and request instrumentation. Set to `false` to disable (zero overhead). |
 | `MCP_DEBUG` | No | `false` | Emit structured debug logs for every request. |
 
-## Known MCP Client Behaviors
+## Open DCR and its Security Limitations
 
-MCP clients interact with OAuth/OIDC in ways that can cause issues with upstream IdPs not specifically designed for MCP. This adapter addresses the most common known problems.
+MCP Clients need a way to get `client_id` necessary to login through the upstream IdP. 
+You can use Open DCR functionality of this adapter if your IdP does not provide it, or if you do not want to use it.
 
-### Clients request all announced scopes
+The Open DCR endpoint returns a fixed public `client_id` (`token_endpoint_auth_method: none`) to be used by MCP Clients. 
+But as many MCP Clients are local apps, any local application can obtain this `client_id` and start an OAuth flow. 
+IdP do not know who is asking for the `client_id`. Two emerging standards address this:
 
-MCP clients read `scopes_supported` from the well-known document and include **all** of them in the `/authorize` request. It is required by the MCP Specification if no scope is explicitly requested by the MCP Server. When an upstream IdP announces dozens of scopes, the authorization request balloons with scopes the MCP server doesn't need — confusing users on the consent screen or causing outright rejection by the upstream IdP if some scopes require pre-approval.
+- **DCR with Software Statement Assertion (SSA)** - cryptographically proves client identity via signed JWTs ([RFC 7591 §2.3](https://rfc-editor.org/rfc/rfc7591#section-2.3)). No major MCP client currently includes Software Statements in DCR requests.
+- **Client ID Metadata Documents (CIMD)** - the `client_id` is an HTTPS URL pointing to a metadata document. Default mechanism in the [MCP Auth Spec (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#client-id-metadata-documents), not yet universally adopted. **This adapter includes experimental CIMD support** - see [CIMD Adapter](#cimd-adapter-experimental).
 
-**Mitigation 1 — control what's announced:**
-
-```bash
-# Only announce scopes your MCP servers actually need
-MCP_WELL_KNOWN_SCOPES_SUPPORTED=openid,api.read,api.write
-```
-
-This replaces the upstream `scopes_supported` in discovery, so greedy clients only see (and request) what you intend.
-
-**Mitigation 2 — filter scopes at the authorize proxy:**
-
-Even if you cannot control what's announced (e.g. you need `scopes_supported` to reflect the full upstream list for other consumers), the authorize proxy can strip unwanted scopes before forwarding to the upstream IdP:
-
-```bash
-# Remove specific problematic scopes from authorize requests
-MCP_PROXY_AUTH_SCOPES_REMOVED=roles,web-origins,microprofile-jwt
-
-# Or use an allowlist — only these scopes reach the upstream IdP
-MCP_PROXY_AUTH_SCOPES_PRESERVED=openid,api.read,api.write
-```
-
-This catches scopes regardless of whether the client added them from the discovery document or hardcoded them.
-
-### Clients always request `offline_access` scope
-
-Some MCP clients (e.g. Claude Code, Cursor IDE) unconditionally add `offline_access` to every authorization request to obtain refresh tokens. This can be problematic if the upstream IdP requires admin consent for offline tokens, rejects unknown scopes, or your policy restricts long-lived refresh tokens. Use `MCP_PROXY_AUTH_SCOPES_REMOVED=offline_access` to strip it before forwarding.
-
-### Combining both controls
-
-`MCP_WELL_KNOWN_SCOPES_SUPPORTED` controls the **demand side** (what clients see and request), while `MCP_PROXY_AUTH_SCOPES_REMOVED` / `MCP_PROXY_AUTH_SCOPES_PRESERVED` controls the **supply side** (what actually reaches the upstream IdP). Using both provides defense in depth.
+Until "DCR with SSA" or CIMD is widely supported, user consent during login at the upstream IdP is the last line of defense. This is an [accepted limitation of the MCP auth ecosystem](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#localhost-redirect-uri-risks).
 
 ## RFC 9207 iss parameter validation
 
@@ -187,19 +167,78 @@ MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS=http://localhost:*,http://127.0.0.1:*
 - Authorization code is never logged (only `code_present: true/false`)
 - State blob is signed, not encrypted — contains redirect_uri and original state (both non-secret); confidentiality relies on TLS and short TTL
 
-## Open DCR and its Security Limitations
+## Resource Parameter Validation (RFC 8707)
 
-MCP Clients need a way to get `client_id` necessary to login through the upstream IdP. 
-You can use Open DCR functionality of this adapter if your IdP does not provide it, or if you do not want to use it.
+[RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) defines the `resource` parameter for OAuth 2.0, binding tokens to a specific resource server audience. The MCP specification (2025-06-18+) mandates that clients include `resource` in both `/authorize` and `/token` requests to prevent confused deputy attacks.
 
-The Open DCR endpoint returns a fixed public `client_id` (`token_endpoint_auth_method: none`) to be used by MCP Clients. 
-But as many MCP Clients are local apps, any local application can obtain this `client_id` and start an OAuth flow. 
-IdP do not know who is asking for the `client_id`. Two emerging standards address this:
+### Validation layers
 
-- **DCR with Software Statement Assertion (SSA)** - cryptographically proves client identity via signed JWTs ([RFC 7591 §2.3](https://rfc-editor.org/rfc/rfc7591#section-2.3)). No major MCP client currently includes Software Statements in DCR requests.
-- **Client ID Metadata Documents (CIMD)** - the `client_id` is an HTTPS URL pointing to a metadata document. Default mechanism in the [MCP Auth Spec (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#client-id-metadata-documents), not yet universally adopted. **This adapter includes experimental CIMD support** - see [CIMD Adapter](#cimd-adapter-experimental).
+1. **Debug logging** (always active) — `resource` value (or `MISSING`) appears in per-request debug logs. Enable with `MCP_DEBUG=true`; grep for `resource=MISSING` to find non-compliant clients.
 
-Until "DCR with SSA" or CIMD is widely supported, user consent during login at the upstream IdP is the last line of defense. This is an [accepted limitation of the MCP auth ecosystem](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#localhost-redirect-uri-risks).
+2. **Format validation** (always active when parameter present) — `resource` must be a valid absolute URI with `http` or `https` scheme and no fragment per RFC 8707 §2. Malformed values are rejected with `400 invalid_request`.
+
+3. **Optional strict enforcement**:
+   - `MCP_PROXY_AUTH_REQUIRE_RESOURCE=true` — rejects requests missing `resource`
+   - `MCP_PROXY_AUTH_ALLOWED_RESOURCES` — comma-separated URI patterns (trailing `*` = prefix match) restricting which MCP servers can authenticate through the adapter
+
+**Configuration examples:**
+
+```bash
+# Permissive (default) — format validation only, log missing values
+MCP_DEBUG=true
+
+# Strict — require resource parameter and restrict to known MCP servers
+MCP_PROXY_AUTH_REQUIRE_RESOURCE=true
+MCP_PROXY_AUTH_ALLOWED_RESOURCES=https://mcp-tools.example.com/*,https://mcp-data.example.com/mcp
+```
+
+### Notes
+
+- **Client support**: MCP client support for `resource` varies (Claude Code/Desktop, VS Code, Cursor IDE, SDKs are at different stages of adoption). **Recommendation**: start with `MCP_PROXY_AUTH_REQUIRE_RESOURCE=false` and monitor logs before enabling enforcement.
+
+- **Upstream IdP compatibility**: The adapter validates `resource` locally and passes it through to upstream IdP. Whether the IdP actually binds the token audience depends on its RFC 8707 support: Keycloak has experimental support since v26.6.0 (requires per-client configuration); Auth0, Okta, and Microsoft Entra ID silently ignore it as of mid-2026. Token audience validation remains the MCP server's responsibility and must be implemented accordingly.
+
+- **`refresh_token` exemption**: The adapter skips `resource` validation for `refresh_token` grants per RFC 8707 §2.2 — the original token's audience binding still applies.
+
+## Client Credentials Passthrough
+
+The adapter transparently proxies OAuth 2.0 client credentials requests to the upstream IdP, supporting the [MCP OAuth Client Credentials extension](https://modelcontextprotocol.io/extensions/auth/oauth-client-credentials). This enables machine-to-machine authentication for MCP without interactive user authorization.
+
+### Supported credential formats
+
+- **Client Secrets** (`grant_type=client_credentials`) — supports both `client_secret_post` (credentials in the request body) and `client_secret_basic` (credentials in the `Authorization: Basic` header per RFC 6749 §2.3.1).
+- **JWT Bearer Assertions** (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`) — forwards the `assertion` parameter and any `client_assertion`/`client_assertion_type` parameters to the upstream IdP.
+
+### How it works
+
+The token proxy forwards all request parameters to the upstream IdP without modification. No `redirect_uri` validation or rewriting is applied (those only affect `authorization_code` grants). The `Authorization` header is forwarded for non-CIMD requests.
+
+### Discovery
+
+The adapter includes `client_credentials` in `grant_types_supported` in its well-known metadata (both in the fallback document and as a default when the upstream omits the field). The `token_endpoint_auth_methods_supported` field passes through from the upstream IdP — if the upstream advertises `client_secret_post`, `client_secret_basic`, or `private_key_jwt`, clients will discover them. The fallback document (used when the upstream cannot be reached) includes `client_secret_basic`, `client_secret_post`, and `none`.
+
+### JWT Bearer Assertion `aud` Caveat
+
+When using JWT bearer assertions (RFC 7523), the client constructs a signed JWT with an `aud` (audience) claim set to the authorization server's token endpoint URL. Since MCP clients discover this adapter as the authorization server, they set `aud` to `{MCP_BASE_URL}/token`.
+
+When the adapter proxies this assertion to the upstream IdP, the upstream validates `aud` against **its own** token endpoint URL. This mismatch causes the upstream to reject the assertion.
+
+**Workaround 1 (recommended)**: Configure the upstream IdP to accept the adapter's token endpoint URL (`{MCP_BASE_URL}/token`) as a valid audience for JWT client assertions. In Keycloak, this can be configured per-client under "Credentials > Client Authenticator > Signed JWT > Valid Audiences". Other IdPs have similar settings. This is transparent to clients — no client-side changes required.
+
+**Workaround 2**: Configure the client to use the upstream IdP's token endpoint URL directly as the `aud` claim, rather than deriving it from discovery. This is valid per RFC 7523 — the upstream IdP *is* the real authorization server, the adapter is just a proxy. Limitations:
+- Requires the client to have out-of-band knowledge of the upstream IdP's token endpoint URL
+- Standard MCP SDK implementations (e.g. `PrivateKeyJwtProvider`) typically derive `aud` from the discovered `token_endpoint` automatically — overriding this requires using lower level client code
+- Couples the client to the deployment's internal architecture
+
+This limitation is inherent to proxying JWT assertions and does not affect the client secrets flow.
+
+## Enterprise-Managed Authorization Passthrough
+
+The adapter is compatible with the [Enterprise-Managed Authorization extension](https://modelcontextprotocol.io/extensions/auth/enterprise-managed-authorization) (`io.modelcontextprotocol/enterprise-managed-authorization`). This extension uses the `urn:ietf:params:oauth:grant-type:jwt-bearer` grant type with an ID-JAG (Identity Assertion JWT Authorization Grant) assertion, which the token proxy already forwards transparently to the upstream IdP.
+
+The adapter does not validate or inspect ID-JAG assertions — that is the upstream authorization server's responsibility.
+
+**Requirements**: The upstream IdP must support JWT bearer assertions (RFC 7523) and be configured to validate ID-JAG tokens from the enterprise IdP. No adapter-specific configuration is needed.
 
 ## CIMD Adapter (EXPERIMENTAL)
 
@@ -257,37 +296,44 @@ Token validation in the MCP Server:
 1. **JWKS signature verification** — the adapter's discovery metadata `jwks_uri` points to the upstream IdP's JWKS, so signature verification cryptographically proves the token's origin correctly. Discovery metadata can, and should, be used here to get `jwks_uri`. This is OAuth compliant token origin verification behaviour.
 2. **Validate `iss` claim against the upstream IdP URL** — JWT `iss` claim validation is required by the OIDC spec. If you want this behaviour, explicitly configure the MCP server with **upstream IdP issuer** and validate against this configuration, do not validate against `issuer` from the discovery metadata.
 
-## Client Credentials Passthrough
+## Known MCP Client Behaviors
 
-The adapter transparently proxies OAuth 2.0 client credentials requests to the upstream IdP, supporting the [MCP OAuth Client Credentials extension](https://modelcontextprotocol.io/extensions/auth/oauth-client-credentials). This enables machine-to-machine authentication for MCP without interactive user authorization.
+MCP clients interact with OAuth/OIDC in ways that can cause issues with upstream IdPs not specifically designed for MCP. This adapter addresses the most common known problems.
 
-### Supported credential formats
+### Clients request all announced scopes
 
-- **Client Secrets** (`grant_type=client_credentials`) — supports both `client_secret_post` (credentials in the request body) and `client_secret_basic` (credentials in the `Authorization: Basic` header per RFC 6749 §2.3.1).
-- **JWT Bearer Assertions** (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`) — forwards the `assertion` parameter and any `client_assertion`/`client_assertion_type` parameters to the upstream IdP.
+MCP clients read `scopes_supported` from the IdP well-known document and include **all** of them in the `/authorize` request. When an upstream IdP announces dozens of scopes, the authorization request balloons with scopes the MCP server doesn't need — confusing users on the consent screen or causing outright rejection by the upstream IdP if some scopes require pre-approval for clients.
 
-### How it works
+**Mitigation 1 — control what's announced:**
 
-The token proxy forwards all request parameters to the upstream IdP without modification. No `redirect_uri` validation or rewriting is applied (those only affect `authorization_code` grants). The `Authorization` header is forwarded for non-CIMD requests.
+```bash
+# Only announce scopes your MCP servers actually need
+MCP_WELL_KNOWN_SCOPES_SUPPORTED=openid,api.read,api.write
+```
 
-### Discovery
+This replaces the upstream `scopes_supported` in discovery, so greedy clients only see (and request) what you intend.
 
-The adapter includes `client_credentials` in `grant_types_supported` in its well-known metadata (both in the fallback document and as a default when the upstream omits the field). The `token_endpoint_auth_methods_supported` field passes through from the upstream IdP — if the upstream advertises `client_secret_post`, `client_secret_basic`, or `private_key_jwt`, clients will discover them. The fallback document (used when the upstream cannot be reached) includes `client_secret_basic`, `client_secret_post`, and `none`.
+**Mitigation 2 — filter scopes at the authorize proxy:**
 
-### JWT Bearer Assertion `aud` Caveat
+Even if you cannot control what's announced (e.g. you need `scopes_supported` to reflect the full upstream list for other consumers), the authorize proxy can strip unwanted scopes before forwarding to the upstream IdP:
 
-When using JWT bearer assertions (RFC 7523), the client constructs a signed JWT with an `aud` (audience) claim set to the authorization server's token endpoint URL. Since MCP clients discover this adapter as the authorization server, they set `aud` to `{MCP_BASE_URL}/token`.
+```bash
+# Remove specific problematic scopes from authorize requests
+MCP_PROXY_AUTH_SCOPES_REMOVED=roles,web-origins,microprofile-jwt
 
-When the adapter proxies this assertion to the upstream IdP, the upstream validates `aud` against **its own** token endpoint URL. This mismatch causes the upstream to reject the assertion.
+# Or use an allowlist — only these scopes reach the upstream IdP
+MCP_PROXY_AUTH_SCOPES_PRESERVED=openid,api.read,api.write
+```
 
-**Workaround 1 (recommended)**: Configure the upstream IdP to accept the adapter's token endpoint URL (`{MCP_BASE_URL}/token`) as a valid audience for JWT client assertions. In Keycloak, this can be configured per-client under "Credentials > Client Authenticator > Signed JWT > Valid Audiences". Other IdPs have similar settings. This is transparent to clients — no client-side changes required.
+This catches scopes regardless of whether the client added them from the discovery document or hardcoded them.
 
-**Workaround 2**: Configure the client to use the upstream IdP's token endpoint URL directly as the `aud` claim, rather than deriving it from discovery. This is valid per RFC 7523 — the upstream IdP *is* the real authorization server, the adapter is just a proxy. Limitations:
-- Requires the client to have out-of-band knowledge of the upstream IdP's token endpoint URL
-- Standard MCP SDK implementations (e.g. `PrivateKeyJwtProvider`) typically derive `aud` from the discovered `token_endpoint` automatically — overriding this requires using lower level client code
-- Couples the client to the deployment's internal architecture
+### Clients always request `offline_access` scope
 
-This limitation is inherent to proxying JWT assertions and does not affect the client secrets flow.
+Some MCP clients (e.g. Claude Code, Cursor IDE) unconditionally add `offline_access` to every authorization request to obtain refresh tokens. This can be problematic if the upstream IdP requires admin consent for offline tokens, rejects unknown scopes, or your policy restricts long-lived refresh tokens. Use `MCP_PROXY_AUTH_SCOPES_REMOVED=offline_access` to strip it before forwarding.
+
+### Combining both controls
+
+`MCP_WELL_KNOWN_SCOPES_SUPPORTED` controls the **demand side** (what clients see and request), while `MCP_PROXY_AUTH_SCOPES_REMOVED` / `MCP_PROXY_AUTH_SCOPES_PRESERVED` controls the **supply side** (what actually reaches the upstream IdP). Using both provides defense in depth.
 
 ## Deployment Notes
 
@@ -432,7 +478,7 @@ Classic HTTP access logs are not emitted — use your reverse proxy or load bala
 
 ## Metrics / Observability
 
-The adapter exposes a `GET /metrics` endpoint in [Prometheus text exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/) when `MCP_METRICS_ENABLED=true` (default). Set `MCP_METRICS_ENABLED=false` to disable entirely -- no endpoint, no middleware, no-op instrumentation stubs, zero overhead.
+The adapter exposes a `GET /metrics` endpoint in [Prometheus text exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/) when `MCP_METRICS_ENABLED=true` (default). Set `MCP_METRICS_ENABLED=false` to disable entirely - no endpoint, no middleware, no-op instrumentation stubs, zero overhead.
 
 Compatible with:
 - **OpenShift** built-in monitoring (ServiceMonitor)
@@ -481,10 +527,6 @@ spec:
     - port: http
       path: /metrics
 ```
-
-## Development
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, linting, and code style guidelines.
 
 ## Upstream Well-Known Handling
 
@@ -541,6 +583,10 @@ Detailed interaction between different components when MCP Authentication happen
 ### Client Credentials passthrough
 
 <img src="docs/mcp_auth_adapter_flow_client_credentials.png" alt="Flow diagram with Client Credentials passthrough" width="1024">
+
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, linting, and code style guidelines.
 
 ## Security
 

@@ -24,8 +24,10 @@ issue tokens — all real auth/token work stays on the upstream IdP.
 - **Authorization adapter** — `GET /authorize` validates `redirect_uri` against
   configured patterns, wraps original `redirect_uri` + `state` into a signed
   HMAC state blob, rewrites `redirect_uri` to the adapter's callback, and
-  redirects to upstream. Supports scope filtering and optional CIMD client_id
-  substitution. Auto-enables when scope filtering, CIMD, or
+  redirects to upstream. Supports scope filtering, optional CIMD client_id
+  substitution, and RFC 8707 `resource` parameter validation (format check
+  always active; optional require + allowlist enforcement via config).
+  Auto-enables when scope filtering, CIMD, or
   `MCP_PROXY_AUTH_STATE_SECRET` is configured.
 - **Authorization callback (RFC 9207 `iss` interception)** —
   `GET /authorize/callback` receives the upstream redirect, verifies the signed
@@ -37,10 +39,13 @@ issue tokens — all real auth/token work stays on the upstream IdP.
   patterns and rewrites it to the adapter's callback URL. For `refresh_token`
   grants, passes through without redirect_uri modification. For
   `client_credentials` and `urn:ietf:params:oauth:grant-type:jwt-bearer` grants,
-  passes all parameters through without redirect_uri logic. Forwards the
-  `Authorization` header to upstream for non-CIMD requests (supports
-  `client_secret_basic` per RFC 6749 §2.3.1; skipped for CIMD because client_id
-  is rewritten). Always active when the authorize proxy is active.
+  passes all parameters through without redirect_uri logic (covers both the
+  Client Credentials extension and the Enterprise-Managed Authorization
+  extension). RFC 8707 `resource` parameter validation is applied to all grant
+  types except `refresh_token`. Forwards the `Authorization` header to upstream
+  for non-CIMD requests (supports `client_secret_basic` per RFC 6749 §2.3.1;
+  skipped for CIMD because client_id is rewritten). Always active when the
+  authorize proxy is active.
 - **CIMD adapter** (EXPERIMENTAL) — Accepts CIMD-style `client_id` URLs from
   MCP clients, validates metadata documents, maps them to upstream IdP
   client_ids, and proxies `/authorize` and `/token` with client_id substitution.
@@ -159,6 +164,10 @@ for key rotation), `MCP_PROXY_AUTH_STATE_TTL_MINUTES` (default 30),
 CIMD (EXPERIMENTAL): `MCP_PROXY_CIMD_MAP`, `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID`,
 `MCP_PROXY_CIMD_CACHE_MINUTES`.
 
+RFC 8707 Resource Parameter: `MCP_PROXY_AUTH_REQUIRE_RESOURCE` (boolean,
+default `false`), `MCP_PROXY_AUTH_ALLOWED_RESOURCES` (comma-separated URI
+patterns with trailing `*` prefix match).
+
 Observability: `MCP_METRICS_ENABLED`.
 
 Lifecycle: `MCP_SHUTDOWN_TIMEOUT_SECONDS`.
@@ -203,3 +212,28 @@ npm run lint:fix     # ESLint auto-fix
   `IMetricsRegistry` in the module, create counters/gauges/histograms from it.
   No external metrics dependencies — the zero-dependency approach is deliberate.
 - OAuth error responses follow RFC format (`{ error, error_description }`).
+- **Router config objects** — Router factory functions accept a single flat
+  typed config interface + `logger`. The config interface `extends` shared
+  sub-interfaces (e.g. `AuthScopeConfig`, `ResourceConfig`) so the config
+  object can be passed directly to helper functions that accept those
+  sub-interfaces — no intermediate destructuring needed. Fields from nested
+  concerns are inlined with a prefix when names would collide
+  (e.g. `stateSecret`, `stateBaseUrl`, `redirectBaseUrl`, `redirectAllowedUris`).
+  Examples: `AuthorizeRouterConfig extends AuthScopeConfig, ResourceConfig`,
+  `TokenRouterConfig extends ResourceConfig`. The `logger` stays as a separate
+  second argument (infrastructure concern, not config).
+- **DRY / code reuse** — When the same validation or business logic applies to
+  multiple routes (e.g. `/authorize` and `/token`), extract it into a shared
+  helper in the appropriate `src/*.ts` utility module rather than duplicating
+  inline. Route handlers should be thin orchestrators that call shared functions
+  and map results to HTTP responses. Existing examples:
+  - `src/uri-validation.ts` — `validateRedirectUriSecurity()`,
+    `validateResourceUri()`, `matchesRedirectPattern()`, `checkResourceParam()`
+  - `src/state-signer.ts` — `signState()`, `verifyState()`
+  - `src/cimd.ts` — validation, resolution, caching used by both authorize and
+    token routes
+  - `src/config.ts` — shared interfaces (`AppConfig`, `ResourceConfig` via
+    re-export from uri-validation) consumed by all route modules
+
+  When adding a new cross-route concern, prefer a pure function returning a
+  result/error value over duplicating HTTP response logic in each handler.

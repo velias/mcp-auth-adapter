@@ -7,7 +7,7 @@ import {
   validateRedirectUri,
   sanitizeForError,
 } from '../cimd';
-import { matchesRedirectPattern } from '../uri-validation';
+import { matchesRedirectPattern, checkResourceParam, ResourceConfig } from '../uri-validation';
 import { signState } from '../state-signer';
 
 export interface AuthScopeConfig {
@@ -15,16 +15,14 @@ export interface AuthScopeConfig {
   preserved?: string[];
 }
 
-export interface AuthCimdConfig {
-  resolve: (cimdUrl: string) => string | null;
-  validateAndCache: (cimdUrl: string) => Promise<CimdDocument>;
-}
-
-export interface AuthStateConfig {
-  baseUrl: string;
-  secret: Buffer;
-  ttlSeconds: number;
-  allowedRedirectUris: string[];
+export interface AuthorizeRouterConfig extends AuthScopeConfig, ResourceConfig {
+  getUpstreamAuthEndpoint: () => string;
+  cimdResolve?: (cimdUrl: string) => string | null;
+  cimdValidateAndCache?: (cimdUrl: string) => Promise<CimdDocument>;
+  stateBaseUrl?: string;
+  stateSecret?: Buffer;
+  stateTtlSeconds?: number;
+  stateAllowedRedirectUris?: string[];
 }
 
 export function filterScopes(
@@ -46,11 +44,8 @@ export function filterScopes(
 }
 
 export function createAuthorizeRouter(
-  getUpstreamAuthEndpoint: () => string,
+  config: AuthorizeRouterConfig,
   logger: Logger,
-  scopeConfig: AuthScopeConfig = {},
-  cimdConfig?: AuthCimdConfig,
-  stateConfig?: AuthStateConfig,
 ): Router {
   const router = Router();
 
@@ -62,13 +57,26 @@ export function createAuthorizeRouter(
       }
     }
 
+    const resource = params.get('resource') || '';
+
     logger.debug('authorize request', {
       ...requestMeta(req),
       scope: params.get('scope'),
       clientId: params.get('client_id'),
       redirectUri: params.get('redirect_uri'),
       responseType: params.get('response_type'),
+      resource: resource || 'MISSING',
     });
+
+    // RFC 8707 resource parameter validation
+    const resourceError = checkResourceParam(resource, config);
+    if (resourceError) {
+      res.status(400).json({
+        error: 'invalid_request',
+        error_description: resourceError,
+      });
+      return;
+    }
 
     // Strip unsupported response_mode
     const responseMode = params.get('response_mode');
@@ -80,7 +88,7 @@ export function createAuthorizeRouter(
     const clientId = params.get('client_id') ?? '';
     let isCimd = false;
 
-    if (cimdConfig && clientId && isCimdClientId(clientId)) {
+    if (config.cimdResolve && clientId && isCimdClientId(clientId)) {
       isCimd = true;
       const urlValidation = validateCimdUrl(clientId);
       if (!urlValidation.valid) {
@@ -91,7 +99,7 @@ export function createAuthorizeRouter(
         return;
       }
 
-      const upstreamClientId = cimdConfig.resolve(clientId);
+      const upstreamClientId = config.cimdResolve(clientId);
       if (!upstreamClientId) {
         logger.debug('authorize: unknown CIMD client rejected', { clientId: clientId.slice(0, 80) });
         res.status(403).json({
@@ -103,7 +111,7 @@ export function createAuthorizeRouter(
 
       let cimdDoc: CimdDocument;
       try {
-        cimdDoc = await cimdConfig.validateAndCache(clientId);
+        cimdDoc = await config.cimdValidateAndCache!(clientId);
       } catch (err) {
         logger.error('authorize: CIMD metadata fetch/validation failed', {
           clientId: clientId.slice(0, 80),
@@ -129,7 +137,7 @@ export function createAuthorizeRouter(
     }
 
     // Validate and wrap redirect_uri for iss interception
-    if (stateConfig) {
+    if (config.stateSecret) {
       const redirectUri = params.get('redirect_uri');
       if (!redirectUri) {
         res.status(400).json({
@@ -140,7 +148,7 @@ export function createAuthorizeRouter(
       }
 
       if (!isCimd) {
-        const match = matchesRedirectPattern(redirectUri, stateConfig.allowedRedirectUris);
+        const match = matchesRedirectPattern(redirectUri, config.stateAllowedRedirectUris!);
         if (!match.allowed) {
           logger.debug('authorize: redirect_uri rejected', {
             reason: match.reason,
@@ -157,17 +165,17 @@ export function createAuthorizeRouter(
       const originalState = params.get('state') ?? null;
       const blob = signState(
         { redirectUri, state: originalState },
-        stateConfig.secret,
-        stateConfig.ttlSeconds,
+        config.stateSecret,
+        config.stateTtlSeconds!,
       );
 
-      params.set('redirect_uri', `${stateConfig.baseUrl}/authorize/callback`);
+      params.set('redirect_uri', `${config.stateBaseUrl}/authorize/callback`);
       params.set('state', blob);
     }
 
     const scope = params.get('scope');
     if (scope) {
-      const filtered = filterScopes(scope, scopeConfig);
+      const filtered = filterScopes(scope, config);
       if (filtered !== null) {
         params.set('scope', filtered);
       } else {
@@ -175,7 +183,7 @@ export function createAuthorizeRouter(
       }
     }
 
-    const upstreamEndpoint = getUpstreamAuthEndpoint();
+    const upstreamEndpoint = config.getUpstreamAuthEndpoint();
     const separator = upstreamEndpoint.includes('?') ? '&' : '?';
     const redirectUrl = `${upstreamEndpoint}${separator}${params.toString()}`;
     logger.debug('authorize redirect', { target: redirectUrl });

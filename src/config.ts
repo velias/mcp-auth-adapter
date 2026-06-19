@@ -20,6 +20,8 @@ export interface AppConfig {
   authStateSecretPrevious?: Buffer;
   authStateTtlSeconds: number;
   allowedRedirectUris: string[];
+  requireResource: boolean;
+  allowedResources: string[];
 }
 
 function requireEnv(name: string): string {
@@ -114,6 +116,21 @@ function parseAllowedRedirectUris(name: string): string[] {
     if (!testUri.includes('://')) {
       throw new Error(
         `${name} contains invalid pattern "${pattern}": must include scheme (e.g. http://, https://, cursor://)`,
+      );
+    }
+  }
+  return patterns;
+}
+
+function parseAllowedResources(name: string): string[] {
+  const raw = process.env[name];
+  if (!raw || raw.trim() === '') return [];
+  const patterns = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  for (const pattern of patterns) {
+    const testUri = pattern.endsWith('*') ? pattern.slice(0, -1) : pattern;
+    if (!testUri.startsWith('https://') && !testUri.startsWith('http://')) {
+      throw new Error(
+        `${name} contains invalid pattern "${pattern}": must use http:// or https:// scheme (RFC 8707)`,
       );
     }
   }
@@ -230,5 +247,7 @@ export function loadConfig(): AppConfig {
     authStateSecretPrevious,
     authStateTtlSeconds: authStateTtlMinutes * 60,
     allowedRedirectUris,
+    requireResource: parseBoolEnv('MCP_PROXY_AUTH_REQUIRE_RESOURCE', false),
+    allowedResources: parseAllowedResources('MCP_PROXY_AUTH_ALLOWED_RESOURCES'),
   };
 }
