@@ -55,6 +55,8 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     authStateSecret: TEST_STATE_SECRET,
     authStateTtlSeconds: 1800,
     allowedRedirectUris: ['http://localhost:*'],
+    requireResource: false,
+    allowedResources: [],
     ...overrides,
   };
 }

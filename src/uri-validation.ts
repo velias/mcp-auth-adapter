@@ -38,6 +38,19 @@ export type PatternMatchResult =
   | { allowed: false; reason: string };
 
 /**
+ * Validates a resource URI per RFC 8707 Section 2: must be an absolute URI
+ * with http or https scheme, no fragment, no userinfo, no control characters.
+ */
+export function validateResourceUri(uri: string): UriSecurityResult {
+  const result = validateRedirectUriSecurity(uri);
+  if (!result.valid) return result;
+  if (result.parsed.protocol !== 'https:' && result.parsed.protocol !== 'http:') {
+    return { valid: false, reason: 'must use http or https scheme' };
+  }
+  return result;
+}
+
+/**
  * Validates a redirect URI against a list of allowed patterns.
  * Applies security pre-checks first, then matches against patterns.
  * Pattern format: trailing `*` = prefix match, otherwise exact match.
@@ -62,4 +75,35 @@ export function matchesRedirectPattern(uri: string, patterns: string[]): Pattern
   }
 
   return { allowed: false, reason: 'no matching pattern' };
+}
+
+export interface ResourceConfig {
+  requireResource: boolean;
+  allowedResources: string[];
+}
+
+/**
+ * Validates the RFC 8707 resource parameter (three layers: require, format, allowlist).
+ * Returns an error_description string if validation fails, or null if OK.
+ */
+export function checkResourceParam(resource: string, config: ResourceConfig): string | null {
+  if (config.requireResource && !resource) {
+    return 'resource parameter is required (RFC 8707)';
+  }
+
+  if (resource) {
+    const uriCheck = validateResourceUri(resource);
+    if (!uriCheck.valid) {
+      return 'resource parameter must be a valid HTTPS URI without fragment';
+    }
+
+    if (config.allowedResources.length > 0) {
+      const match = matchesRedirectPattern(resource, config.allowedResources);
+      if (!match.allowed) {
+        return 'resource not allowed';
+      }
+    }
+  }
+
+  return null;
 }

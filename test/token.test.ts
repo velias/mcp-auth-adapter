@@ -17,11 +17,13 @@ function createTestApp(options: {
   const { map = CIMD_MAP, defaultClientId } = options;
   const app = express();
   app.disable('x-powered-by');
-  app.use(createTokenRouter(
-    () => UPSTREAM_TOKEN_URL,
-    { map, defaultClientId },
-    createLogger(false),
-  ));
+  app.use(createTokenRouter({
+    getUpstreamTokenEndpoint: () => UPSTREAM_TOKEN_URL,
+    cimdMap: map,
+    cimdDefaultClientId: defaultClientId,
+    requireResource: false,
+    allowedResources: [],
+  }, createLogger(false)));
   return app;
 }
 
@@ -368,8 +370,8 @@ describe('POST /token (Token Proxy)', () => {
 
   describe('redirect_uri validation and rewriting', () => {
     const REDIRECT_CONFIG = {
-      baseUrl: 'http://localhost:3000',
-      allowedRedirectUris: ['http://localhost:*', 'http://127.0.0.1:*'],
+      redirectBaseUrl: 'http://localhost:3000',
+      redirectAllowedUris: ['http://localhost:*', 'http://127.0.0.1:*'],
     };
 
     function createAppWithRedirect(options: {
@@ -379,13 +381,14 @@ describe('POST /token (Token Proxy)', () => {
       const { map = CIMD_MAP, defaultClientId } = options;
       const app = express();
       app.disable('x-powered-by');
-      app.use(createTokenRouter(
-        () => UPSTREAM_TOKEN_URL,
-        { map, defaultClientId },
-        createLogger(false),
-        undefined,
-        REDIRECT_CONFIG,
-      ));
+      app.use(createTokenRouter({
+        getUpstreamTokenEndpoint: () => UPSTREAM_TOKEN_URL,
+        cimdMap: map,
+        cimdDefaultClientId: defaultClientId,
+        requireResource: false,
+        allowedResources: [],
+        ...REDIRECT_CONFIG,
+      }, createLogger(false)));
       return app;
     }
 
@@ -666,6 +669,181 @@ describe('POST /token (Token Proxy)', () => {
       expect(res.status).toBe(200);
       const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
       expect(fetchCall[1].headers['Authorization']).toBeUndefined();
+    });
+  });
+
+  describe('resource parameter validation', () => {
+    function createAppWithResource(options: {
+      requireResource?: boolean;
+      allowedResources?: string[];
+    } = {}) {
+      const { requireResource = false, allowedResources = [] } = options;
+      const app = express();
+      app.disable('x-powered-by');
+      app.use(createTokenRouter({
+        getUpstreamTokenEndpoint: () => UPSTREAM_TOKEN_URL,
+        cimdMap: CIMD_MAP,
+        requireResource,
+        allowedResources,
+      }, createLogger(false)));
+      return app;
+    }
+
+    it('passes through valid resource for authorization_code grant', async () => {
+      mockUpstreamTokenResponse();
+      const app = createAppWithResource();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'my-client',
+          code: 'code-123',
+          resource: 'https://mcp.example.com',
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const body = new URLSearchParams(fetchCall[1].body);
+      expect(body.get('resource')).toBe('https://mcp.example.com');
+    });
+
+    it('rejects resource with custom scheme', async () => {
+      const app = createAppWithResource();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'my-client',
+          code: 'code-123',
+          resource: 'cursor://foo/bar',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+      expect(res.body.error_description).toContain('resource');
+    });
+
+    it('rejects resource with fragment', async () => {
+      const app = createAppWithResource();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'my-client',
+          code: 'code-123',
+          resource: 'https://mcp.example.com#frag',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+    });
+
+    it('rejects request missing resource when requireResource is true', async () => {
+      const app = createAppWithResource({ requireResource: true });
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'my-client',
+          code: 'code-123',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+      expect(res.body.error_description).toContain('resource');
+      expect(res.body.error_description).toContain('RFC 8707');
+    });
+
+    it('enforces requireResource for client_credentials grant', async () => {
+      const app = createAppWithResource({ requireResource: true });
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'client_credentials',
+          client_id: 'my-service',
+          client_secret: 'secret',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+      expect(res.body.error_description).toContain('resource');
+    });
+
+    it('skips validation for refresh_token grant', async () => {
+      mockUpstreamTokenResponse({ body: { access_token: 'new_tok', token_type: 'Bearer' } });
+      const app = createAppWithResource({ requireResource: true });
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'refresh_token',
+          client_id: 'my-client',
+          refresh_token: 'rt-abc',
+        });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('rejects non-matching resource with allowlist', async () => {
+      const app = createAppWithResource({ allowedResources: ['https://mcp.example.com/*'] });
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'my-client',
+          code: 'code-123',
+          resource: 'https://other.example.com/mcp',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+      expect(res.body.error_description).toBe('resource not allowed');
+    });
+
+    it('passes matching resource with allowlist', async () => {
+      mockUpstreamTokenResponse();
+      const app = createAppWithResource({ allowedResources: ['https://mcp.example.com/*'] });
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: 'my-client',
+          code: 'code-123',
+          resource: 'https://mcp.example.com/v1/tools',
+        });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('enforces validation for jwt-bearer grant', async () => {
+      const app = createAppWithResource({ requireResource: true });
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+          assertion: 'eyJ...',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+      expect(res.body.error_description).toContain('resource');
     });
   });
 });

@@ -25,6 +25,8 @@ const CONFIG: AppConfig = {
   shutdownTimeoutSeconds: 30,
   authStateTtlSeconds: 1800,
   allowedRedirectUris: [],
+  requireResource: false,
+  allowedResources: [],
 };
 
 function makeApp(configOverrides: Partial<AppConfig> = {}) {

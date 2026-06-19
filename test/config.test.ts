@@ -587,3 +587,71 @@ describe('loadConfig — allowed redirect URIs', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// RFC 8707 Resource parameter config
+// ---------------------------------------------------------------------------
+describe('loadConfig — resource parameter config', () => {
+  it('requireResource defaults to false when unset', () => {
+    withEnv({}, () => {
+      expect(loadConfig().requireResource).toBe(false);
+    });
+  });
+
+  it('requireResource is true when env is "true"', () => {
+    withEnv({ MCP_PROXY_AUTH_REQUIRE_RESOURCE: 'true' }, () => {
+      expect(loadConfig().requireResource).toBe(true);
+    });
+  });
+
+  it('requireResource is false when env is "false"', () => {
+    withEnv({ MCP_PROXY_AUTH_REQUIRE_RESOURCE: 'false' }, () => {
+      expect(loadConfig().requireResource).toBe(false);
+    });
+  });
+
+  it('allowedResources returns empty array when unset', () => {
+    withEnv({}, () => {
+      expect(loadConfig().allowedResources).toEqual([]);
+    });
+  });
+
+  it('allowedResources parses comma-separated patterns', () => {
+    withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'https://mcp.example.com/*,https://api.example.com/mcp' }, () => {
+      expect(loadConfig().allowedResources).toEqual(['https://mcp.example.com/*', 'https://api.example.com/mcp']);
+    });
+  });
+
+  it('allowedResources trims whitespace', () => {
+    withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: ' https://mcp.example.com/* , https://api.example.com/mcp ' }, () => {
+      expect(loadConfig().allowedResources).toEqual(['https://mcp.example.com/*', 'https://api.example.com/mcp']);
+    });
+  });
+
+  it('allowedResources rejects patterns without http/https scheme', () => {
+    withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'cursor://foo/*' }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_PROXY_AUTH_ALLOWED_RESOURCES.*http:\/\/ or https:\/\//);
+    });
+  });
+
+  it('allowedResources rejects patterns without any scheme', () => {
+    withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'mcp.example.com/foo' }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_PROXY_AUTH_ALLOWED_RESOURCES.*http:\/\/ or https:\/\//);
+    });
+  });
+
+  it('allowedResources accepts http:// patterns (for dev)', () => {
+    withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'http://localhost:3000/*' }, () => {
+      expect(loadConfig().allowedResources).toEqual(['http://localhost:3000/*']);
+    });
+  });
+
+  it('both fields are independent of auth proxy config', () => {
+    withEnv({ MCP_PROXY_AUTH_REQUIRE_RESOURCE: 'true', MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'https://mcp.example.com/*' }, () => {
+      const cfg = loadConfig();
+      expect(cfg.requireResource).toBe(true);
+      expect(cfg.allowedResources).toEqual(['https://mcp.example.com/*']);
+      expect(cfg.proxyAuthEndpoint).toBe(false);
+    });
+  });
+});
