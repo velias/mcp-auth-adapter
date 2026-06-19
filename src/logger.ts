@@ -1,6 +1,7 @@
 import { Request } from 'express';
 
 export type Logger = {
+  isDebugEnabled: boolean;
   info: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
   error: (message: string, meta?: Record<string, unknown>) => void;
@@ -28,6 +29,7 @@ function formatLine(level: string, message: string, meta?: Record<string, unknow
 
 export function createLogger(debugEnabled: boolean): Logger {
   return {
+    isDebugEnabled: debugEnabled,
     info: (message, meta?) => console.log(formatLine('info', message, meta)),
     warn: (message, meta?) => console.warn(formatLine('warn', message, meta)),
     error: (message, meta?) => console.error(formatLine('error', message, meta)),

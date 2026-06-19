@@ -65,7 +65,7 @@ export function createRegisterRouter(config: AppConfig, logger: Logger, rejected
   router.post('/register', requireJsonContentType, (req: Request, res: Response) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
-    logger.debug('DCR register request', {
+    if (logger.isDebugEnabled) logger.debug('DCR register request', {
       ...requestMeta(req),
       clientName: typeof body.client_name === 'string' ? body.client_name : undefined,
       redirectUriCount: Array.isArray(body.redirect_uris) ? body.redirect_uris.length : 0,

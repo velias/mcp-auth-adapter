@@ -155,18 +155,18 @@ export function validateUpstreamDoc(
 }
 
 export function createWellKnownRouter(
-  getDocument: () => Record<string, unknown>,
+  getSerializedDocument: () => string,
   logger: Logger,
   refreshMinutes = 60,
 ): Router {
   const router = Router();
-  const maxAgeSecs = Math.floor((refreshMinutes * 60) / 2);
+  const cacheControl = `public, max-age=${Math.floor((refreshMinutes * 60) / 2)}`;
 
   const handler = (req: Request, res: Response) => {
-    logger.debug('well-known request', requestMeta(req));
+    if (logger.isDebugEnabled) logger.debug('well-known request', requestMeta(req));
     res.set('Content-Type', 'application/json');
-    res.set('Cache-Control', `public, max-age=${maxAgeSecs}`);
-    res.json(getDocument());
+    res.set('Cache-Control', cacheControl);
+    res.send(getSerializedDocument());
   };
 
   router.get('/.well-known/oauth-authorization-server', handler);

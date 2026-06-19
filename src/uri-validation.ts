@@ -195,6 +195,47 @@ export function matchedResourcePattern(resource: string, allowedResources: Parse
   return '';
 }
 
+export interface ResourceCheckResult {
+  error: ResourceCheckFailure | null;
+  matchedPattern: string;
+}
+
+/**
+ * Validates the RFC 8707 resource parameter and returns the matched allowlist
+ * pattern in a single pass (one URL parse). Combines the work of
+ * checkResourceParam + matchedResourcePattern to avoid duplicate parsing.
+ */
+export function checkAndMatchResource(resource: string, config: ResourceConfig): ResourceCheckResult {
+  if (config.requireResource && !resource) {
+    return {
+      error: { description: 'resource parameter is required (RFC 8707)', reason: 'resource_required' },
+      matchedPattern: '',
+    };
+  }
+  if (!resource) return { error: null, matchedPattern: '' };
+
+  const uriCheck = validateResourceUri(resource);
+  if (!uriCheck.valid) {
+    return {
+      error: { description: 'resource parameter must be a valid HTTPS URI without fragment', reason: 'resource_invalid' },
+      matchedPattern: '',
+    };
+  }
+
+  if (config.allowedResources.length > 0) {
+    const p = config.allowedResources.find(pat => matchesSinglePattern(uriCheck.parsed, resource, pat));
+    if (!p) {
+      return {
+        error: { description: 'resource not allowed', reason: 'resource_not_allowed' },
+        matchedPattern: '',
+      };
+    }
+    return { error: null, matchedPattern: p.original };
+  }
+
+  return { error: null, matchedPattern: '' };
+}
+
 /**
  * Validates the RFC 8707 resource parameter (three layers: require, format, allowlist).
  * Validates the URI once and reuses the parsed URL for allowlist matching.

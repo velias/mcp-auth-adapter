@@ -14,6 +14,8 @@ export type CimdUrlValidation =
   | { valid: true }
   | { valid: false; reason: string };
 
+const DOT_SEGMENT_RE = /(?:^|\/)\.\.(\/|$)|(?:^|\/)\.(\/|$)/;
+
 const FORBIDDEN_AUTH_METHODS = new Set([
   'client_secret_post',
   'client_secret_basic',
@@ -28,8 +30,6 @@ const CIMD_FETCH_TIMEOUT_MS = 5000;
  * Checks the raw string for dot segments before the URL constructor normalizes them.
  */
 export function validateCimdUrl(url: string): CimdUrlValidation {
-  // Check raw string for dot segments before URL parser normalizes them away
-  const DOT_SEGMENT_RE = /(?:^|\/)\.\.(\/|$)|(?:^|\/)\.(\/|$)/;
   try {
     const rawPath = url.replace(/^https?:\/\/[^/]*/, '').split('?')[0].split('#')[0];
     if (DOT_SEGMENT_RE.test(rawPath)) {
