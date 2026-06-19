@@ -2,6 +2,7 @@ import request from 'supertest';
 import express from 'express';
 import { createTokenRouter } from '../src/routes/token';
 import { createLogger } from '../src/logger';
+import { parseResourcePatterns } from '../src/uri-validation';
 
 const UPSTREAM_TOKEN_URL = 'https://sso.example.com/auth/realms/test/protocol/openid-connect/token';
 
@@ -23,6 +24,7 @@ function createTestApp(options: {
     cimdDefaultClientId: defaultClientId,
     requireResource: false,
     allowedResources: [],
+    rejectedTotal: { inc() {} },
   }, createLogger(false)));
   return app;
 }
@@ -387,6 +389,7 @@ describe('POST /token (Token Proxy)', () => {
         cimdDefaultClientId: defaultClientId,
         requireResource: false,
         allowedResources: [],
+        rejectedTotal: { inc() {} },
         ...REDIRECT_CONFIG,
       }, createLogger(false)));
       return app;
@@ -672,6 +675,84 @@ describe('POST /token (Token Proxy)', () => {
     });
   });
 
+  describe('rejection counter', () => {
+    it('increments rejectedTotal with content_type_invalid (no grant_type)', async () => {
+      const incSpy = jest.fn();
+      const app = express();
+      app.disable('x-powered-by');
+      app.use(createTokenRouter({
+        getUpstreamTokenEndpoint: () => UPSTREAM_TOKEN_URL,
+        cimdMap: CIMD_MAP,
+        requireResource: false,
+        allowedResources: [],
+        rejectedTotal: { inc: incSpy },
+      }, createLogger(false)));
+
+      await request(app)
+        .post('/token')
+        .set('Content-Type', 'application/json')
+        .send(JSON.stringify({ grant_type: 'authorization_code' }));
+
+      expect(incSpy).toHaveBeenCalledWith({
+        route: '/token',
+        reason: 'content_type_invalid',
+      });
+    });
+
+    it('increments rejectedTotal with grant_type label for resource_required', async () => {
+      const incSpy = jest.fn();
+      const app = express();
+      app.disable('x-powered-by');
+      app.use(createTokenRouter({
+        getUpstreamTokenEndpoint: () => UPSTREAM_TOKEN_URL,
+        cimdMap: CIMD_MAP,
+        requireResource: true,
+        allowedResources: [],
+        rejectedTotal: { inc: incSpy },
+      }, createLogger(false)));
+
+      await request(app)
+        .post('/token')
+        .type('form')
+        .send({ grant_type: 'authorization_code', client_id: 'test', code: 'c' });
+
+      expect(incSpy).toHaveBeenCalledWith({
+        route: '/token',
+        reason: 'resource_required',
+        grant_type: 'authorization_code',
+      });
+    });
+  });
+
+  describe('grant_type label on upstream metrics', () => {
+    it('includes grant_type in upstream duration and status metrics', async () => {
+      const { createMetricsRegistry } = await import('../src/metrics');
+      const registry = createMetricsRegistry(true);
+      mockUpstreamTokenResponse();
+
+      const app = express();
+      app.disable('x-powered-by');
+      app.use(createTokenRouter({
+        getUpstreamTokenEndpoint: () => UPSTREAM_TOKEN_URL,
+        cimdMap: {},
+        requireResource: false,
+        allowedResources: [],
+        rejectedTotal: { inc() {} },
+        metricsRegistry: registry,
+      }, createLogger(false)));
+
+      await request(app)
+        .post('/token')
+        .type('form')
+        .send({ grant_type: 'authorization_code', client_id: 'test', code: 'c' });
+
+      const output = registry.serialize();
+      expect(output).toContain('grant_type="authorization_code"');
+      expect(output).toContain('mcp_auth_token_proxy_upstream_status_total');
+      expect(output).toContain('mcp_auth_token_proxy_upstream_duration_seconds');
+    });
+  });
+
   describe('resource parameter validation', () => {
     function createAppWithResource(options: {
       requireResource?: boolean;
@@ -684,7 +765,8 @@ describe('POST /token (Token Proxy)', () => {
         getUpstreamTokenEndpoint: () => UPSTREAM_TOKEN_URL,
         cimdMap: CIMD_MAP,
         requireResource,
-        allowedResources,
+        allowedResources: parseResourcePatterns(allowedResources),
+        rejectedTotal: { inc() {} },
       }, createLogger(false)));
       return app;
     }

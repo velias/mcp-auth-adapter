@@ -77,30 +77,143 @@ export function matchesRedirectPattern(uri: string, patterns: string[]): Pattern
   return { allowed: false, reason: 'no matching pattern' };
 }
 
+export interface ParsedResourcePattern {
+  original: string;
+  protocol: string;
+  hostname: string;
+  isDomainWildcard: boolean;
+  baseDomain: string;
+  port: string;
+  isPathWildcard: boolean;
+  pathname: string;
+}
+
+/**
+ * Pre-parses resource allowlist patterns at config time so runtime matching
+ * is pure field comparison with no URL construction.
+ */
+export function parseResourcePatterns(patterns: string[]): ParsedResourcePattern[] {
+  const result: ParsedResourcePattern[] = [];
+  for (const pattern of patterns) {
+    const isPathWildcard = pattern.endsWith('*');
+    const stripped = isPathWildcard ? pattern.slice(0, -1) : pattern;
+    let patternUrl: URL;
+    try {
+      patternUrl = new URL(stripped.endsWith('/') ? stripped : stripped + '/');
+    } catch {
+      continue;
+    }
+
+    const hostname = patternUrl.hostname;
+    const isDomainWildcard = hostname.startsWith('*.');
+
+    let pathname: string;
+    if (isPathWildcard) {
+      const prefix = pattern.slice(0, -1);
+      const prefixUrl = new URL(prefix.endsWith('/') ? prefix : prefix + '/');
+      pathname = prefixUrl.pathname;
+    } else {
+      pathname = patternUrl.pathname;
+    }
+
+    result.push({
+      original: pattern,
+      protocol: patternUrl.protocol,
+      hostname,
+      isDomainWildcard,
+      baseDomain: isDomainWildcard ? hostname.slice(2) : '',
+      port: patternUrl.port,
+      isPathWildcard,
+      pathname,
+    });
+  }
+  return result;
+}
+
 export interface ResourceConfig {
   requireResource: boolean;
-  allowedResources: string[];
+  allowedResources: ParsedResourcePattern[];
+}
+
+export type ResourceCheckFailure = {
+  description: string;
+  reason: 'resource_required' | 'resource_invalid' | 'resource_not_allowed';
+};
+
+function matchesSinglePattern(parsed: URL, rawUri: string, p: ParsedResourcePattern): boolean {
+  if (parsed.protocol !== p.protocol) return false;
+
+  if (p.isDomainWildcard) {
+    if (parsed.hostname !== p.baseDomain && !parsed.hostname.endsWith('.' + p.baseDomain)) return false;
+  } else {
+    if (parsed.hostname !== p.hostname) return false;
+  }
+
+  if (p.port && parsed.port !== p.port) return false;
+
+  if (p.isPathWildcard) {
+    return parsed.pathname.startsWith(p.pathname) || parsed.pathname + '/' === p.pathname;
+  } else if (p.isDomainWildcard) {
+    return parsed.pathname === p.pathname || parsed.pathname + '/' === p.pathname;
+  } else {
+    return rawUri === p.original;
+  }
+}
+
+/**
+ * Matches a resource URI against pre-parsed allowed patterns.
+ * Pattern host `*.example.com` matches `example.com` and any subdomain.
+ * Trailing `*` in path = prefix match, otherwise exact match.
+ */
+export function matchesResourcePattern(uri: string, patterns: ParsedResourcePattern[]): PatternMatchResult {
+  const securityCheck = validateResourceUri(uri);
+  if (!securityCheck.valid) {
+    return { allowed: false, reason: securityCheck.reason };
+  }
+
+  for (const p of patterns) {
+    if (matchesSinglePattern(securityCheck.parsed, uri, p)) return { allowed: true };
+  }
+
+  return { allowed: false, reason: 'no matching pattern' };
+}
+
+/**
+ * Returns the first matching resource allowlist pattern for use as a metrics label.
+ * Returns empty string when no match or resource is empty.
+ * Validates the input URI once and iterates pre-parsed patterns.
+ */
+export function matchedResourcePattern(resource: string, allowedResources: ParsedResourcePattern[]): string {
+  if (!resource || allowedResources.length === 0) return '';
+
+  const securityCheck = validateResourceUri(resource);
+  if (!securityCheck.valid) return '';
+
+  for (const p of allowedResources) {
+    if (matchesSinglePattern(securityCheck.parsed, resource, p)) return p.original;
+  }
+  return '';
 }
 
 /**
  * Validates the RFC 8707 resource parameter (three layers: require, format, allowlist).
- * Returns an error_description string if validation fails, or null if OK.
+ * Validates the URI once and reuses the parsed URL for allowlist matching.
  */
-export function checkResourceParam(resource: string, config: ResourceConfig): string | null {
+export function checkResourceParam(resource: string, config: ResourceConfig): ResourceCheckFailure | null {
   if (config.requireResource && !resource) {
-    return 'resource parameter is required (RFC 8707)';
+    return { description: 'resource parameter is required (RFC 8707)', reason: 'resource_required' };
   }
 
   if (resource) {
     const uriCheck = validateResourceUri(resource);
     if (!uriCheck.valid) {
-      return 'resource parameter must be a valid HTTPS URI without fragment';
+      return { description: 'resource parameter must be a valid HTTPS URI without fragment', reason: 'resource_invalid' };
     }
 
     if (config.allowedResources.length > 0) {
-      const match = matchesRedirectPattern(resource, config.allowedResources);
-      if (!match.allowed) {
-        return 'resource not allowed';
+      const matched = config.allowedResources.some(p => matchesSinglePattern(uriCheck.parsed, resource, p));
+      if (!matched) {
+        return { description: 'resource not allowed', reason: 'resource_not_allowed' };
       }
     }
   }

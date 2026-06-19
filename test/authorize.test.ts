@@ -2,6 +2,7 @@ import request from 'supertest';
 import { createApp } from '../src/app';
 import { AppConfig } from '../src/config';
 import { filterScopes } from '../src/routes/authorize';
+import { parseResourcePatterns } from '../src/uri-validation';
 
 const UPSTREAM_AUTH_ENDPOINT = 'https://sso.example.com/auth/realms/test/protocol/openid-connect/auth';
 
@@ -561,6 +562,48 @@ describe('GET /authorize (CIMD integration)', () => {
   });
 });
 
+describe('GET /authorize (metrics counters)', () => {
+  it('produces mcp_auth_request_rejected_total on resource rejection', async () => {
+    const { app } = createApp({
+      config: { ...CONFIG, metricsEnabled: true, allowedResources: parseResourcePatterns(['https://mcp.example.com/*']) },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    });
+
+    await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'my-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+        resource: 'https://other.com/mcp',
+      });
+
+    const res = await request(app).get('/metrics');
+    expect(res.text).toContain('mcp_auth_request_rejected_total');
+    expect(res.text).toContain('reason="resource_not_allowed"');
+    expect(res.text).toContain('route="/authorize"');
+  });
+
+  it('produces mcp_auth_authorize_redirects_total with resource label on success', async () => {
+    const { app } = createApp({
+      config: { ...CONFIG, metricsEnabled: true, allowedResources: parseResourcePatterns(['https://mcp.example.com/*']) },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    });
+
+    await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'my-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+        resource: 'https://mcp.example.com/v1',
+      });
+
+    const res = await request(app).get('/metrics');
+    expect(res.text).toContain('mcp_auth_authorize_redirects_total{resource="https://mcp.example.com/*"} 1');
+  });
+});
+
 describe('Global JSON error handler', () => {
   it('returns RFC-style JSON 500 on unhandled route errors', async () => {
     const poisoned = { toString() { throw new Error('Simulated internal failure'); } };
@@ -729,7 +772,7 @@ describe('GET /authorize (resource parameter)', () => {
 
   describe('allowlist enforcement', () => {
     it('passes matching resource', async () => {
-      const app = makeApp({ allowedResources: ['https://mcp.example.com/*'] });
+      const app = makeApp({ allowedResources: parseResourcePatterns(['https://mcp.example.com/*']) });
 
       const res = await request(app)
         .get('/authorize')
@@ -744,7 +787,7 @@ describe('GET /authorize (resource parameter)', () => {
     });
 
     it('rejects non-matching resource', async () => {
-      const app = makeApp({ allowedResources: ['https://mcp.example.com/*'] });
+      const app = makeApp({ allowedResources: parseResourcePatterns(['https://mcp.example.com/*']) });
 
       const res = await request(app)
         .get('/authorize')
@@ -761,7 +804,7 @@ describe('GET /authorize (resource parameter)', () => {
     });
 
     it('passes exact match', async () => {
-      const app = makeApp({ allowedResources: ['https://mcp.example.com/mcp'] });
+      const app = makeApp({ allowedResources: parseResourcePatterns(['https://mcp.example.com/mcp']) });
 
       const res = await request(app)
         .get('/authorize')

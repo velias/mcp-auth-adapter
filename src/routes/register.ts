@@ -1,9 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { AppConfig } from '../config';
 import { Logger, requestMeta } from '../logger';
+import { ICounter } from '../metrics';
 import { requireJsonContentType } from '../middleware/security';
 import { validateRedirectUriSecurity } from '../uri-validation';
 
+const ROUTE = '/register';
 const DCR_ECHO_FIELDS = [
   'redirect_uris',
   'grant_types',
@@ -57,7 +59,7 @@ export function validateStringArray(field: string, value: unknown): ValidationEr
   return null;
 }
 
-export function createRegisterRouter(config: AppConfig, logger: Logger): Router {
+export function createRegisterRouter(config: AppConfig, logger: Logger, rejectedTotal: ICounter): Router {
   const router = Router();
 
   router.post('/register', requireJsonContentType, (req: Request, res: Response) => {
@@ -72,6 +74,7 @@ export function createRegisterRouter(config: AppConfig, logger: Logger): Router 
     if (body.redirect_uris !== undefined) {
       const err = validateRedirectUris(body.redirect_uris);
       if (err) {
+        rejectedTotal.inc({ route: ROUTE, reason: 'invalid_redirect_uris' });
         res.status(400).json({
           error: 'invalid_client_metadata',
           error_description: `${err.field}: ${err.reason}`,
@@ -84,6 +87,7 @@ export function createRegisterRouter(config: AppConfig, logger: Logger): Router 
       if (body[field] !== undefined) {
         const err = validateStringArray(field, body[field]);
         if (err) {
+          rejectedTotal.inc({ route: ROUTE, reason: `invalid_${field}` });
           res.status(400).json({
             error: 'invalid_client_metadata',
             error_description: `${err.field}: ${err.reason}`,

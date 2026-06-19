@@ -413,6 +413,40 @@ describe('CIMD cache metrics', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Rejection counter integration
+// ---------------------------------------------------------------------------
+describe('Rejection counter — /register', () => {
+  it('records mcp_auth_request_rejected_total on invalid redirect_uris', async () => {
+    const { app } = createApp({ config: BASE_CONFIG, upstreamDoc: MOCK_UPSTREAM_DOC });
+
+    await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ redirect_uris: 'not-an-array' });
+
+    const res = await request(app).get('/metrics');
+    expect(res.text).toContain('mcp_auth_request_rejected_total{reason="invalid_redirect_uris",route="/register"} 1');
+  });
+});
+
+describe('Authorize redirects counter', () => {
+  const AUTH_CONFIG_WITH_METRICS: AppConfig = {
+    ...BASE_CONFIG,
+    proxyAuthEndpoint: true,
+    authScopesRemoved: ['offline_access'],
+    authStateSecret: TEST_STATE_SECRET,
+  };
+
+  it('records mcp_auth_authorize_redirects_total on successful redirect', async () => {
+    const { app } = createApp({ config: AUTH_CONFIG_WITH_METRICS, upstreamDoc: MOCK_UPSTREAM_DOC });
+    await request(app)
+      .get('/authorize?response_type=code&client_id=test&redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcallback');
+    const res = await request(app).get('/metrics');
+    expect(res.text).toContain('mcp_auth_authorize_redirects_total');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Upstream refresh metrics (via metricsRegistry from createApp)
 // ---------------------------------------------------------------------------
 describe('Upstream refresh metrics', () => {

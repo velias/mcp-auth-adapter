@@ -7,8 +7,11 @@ import {
   validateRedirectUri,
   sanitizeForError,
 } from '../cimd';
-import { matchesRedirectPattern, checkResourceParam, ResourceConfig } from '../uri-validation';
+import { matchesRedirectPattern, checkResourceParam, matchedResourcePattern, ResourceConfig } from '../uri-validation';
+import { ICounter } from '../metrics';
 import { signState } from '../state-signer';
+
+const ROUTE = '/authorize';
 
 export interface AuthScopeConfig {
   removed?: string[];
@@ -23,6 +26,8 @@ export interface AuthorizeRouterConfig extends AuthScopeConfig, ResourceConfig {
   stateSecret?: Buffer;
   stateTtlSeconds?: number;
   stateAllowedRedirectUris?: string[];
+  rejectedTotal: ICounter;
+  redirectsTotal: ICounter;
 }
 
 export function filterScopes(
@@ -58,6 +63,9 @@ export function createAuthorizeRouter(
     }
 
     const resource = params.get('resource') || '';
+    const resourceLabel: Record<string, string> = config.allowedResources.length > 0
+      ? { resource: matchedResourcePattern(resource, config.allowedResources) }
+      : {};
 
     logger.debug('authorize request', {
       ...requestMeta(req),
@@ -71,9 +79,10 @@ export function createAuthorizeRouter(
     // RFC 8707 resource parameter validation
     const resourceError = checkResourceParam(resource, config);
     if (resourceError) {
+      config.rejectedTotal.inc({ route: ROUTE, reason: resourceError.reason, ...resourceLabel });
       res.status(400).json({
         error: 'invalid_request',
-        error_description: resourceError,
+        error_description: resourceError.description,
       });
       return;
     }
@@ -92,6 +101,7 @@ export function createAuthorizeRouter(
       isCimd = true;
       const urlValidation = validateCimdUrl(clientId);
       if (!urlValidation.valid) {
+        config.rejectedTotal.inc({ route: ROUTE, reason: 'cimd_url_invalid', ...resourceLabel });
         res.status(400).json({
           error: 'invalid_client',
           error_description: `Invalid CIMD client_id URL: ${sanitizeForError(urlValidation.reason)}`,
@@ -102,6 +112,7 @@ export function createAuthorizeRouter(
       const upstreamClientId = config.cimdResolve(clientId);
       if (!upstreamClientId) {
         logger.debug('authorize: unknown CIMD client rejected', { clientId: clientId.slice(0, 80) });
+        config.rejectedTotal.inc({ route: ROUTE, reason: 'cimd_client_unknown', ...resourceLabel });
         res.status(403).json({
           error: 'invalid_client',
           error_description: `Unknown CIMD client: ${sanitizeForError(clientId)}`,
@@ -117,6 +128,7 @@ export function createAuthorizeRouter(
           clientId: clientId.slice(0, 80),
           error: String(err),
         });
+        config.rejectedTotal.inc({ route: ROUTE, reason: 'cimd_metadata_failed', ...resourceLabel });
         res.status(400).json({
           error: 'invalid_client',
           error_description: 'Failed to fetch or validate CIMD metadata document',
@@ -126,6 +138,7 @@ export function createAuthorizeRouter(
 
       const redirectUri = params.get('redirect_uri');
       if (redirectUri && !validateRedirectUri(redirectUri, cimdDoc)) {
+        config.rejectedTotal.inc({ route: ROUTE, reason: 'cimd_redirect_uri_mismatch', ...resourceLabel });
         res.status(400).json({
           error: 'invalid_request',
           error_description: `redirect_uri does not match any registered URI in the CIMD metadata document`,
@@ -140,6 +153,7 @@ export function createAuthorizeRouter(
     if (config.stateSecret) {
       const redirectUri = params.get('redirect_uri');
       if (!redirectUri) {
+        config.rejectedTotal.inc({ route: ROUTE, reason: 'redirect_uri_missing', ...resourceLabel });
         res.status(400).json({
           error: 'invalid_request',
           error_description: 'redirect_uri is required',
@@ -154,6 +168,7 @@ export function createAuthorizeRouter(
             reason: match.reason,
             uri: redirectUri.slice(0, 200),
           });
+          config.rejectedTotal.inc({ route: ROUTE, reason: 'redirect_uri_rejected', ...resourceLabel });
           res.status(400).json({
             error: 'invalid_request',
             error_description: 'redirect_uri not allowed',
@@ -187,6 +202,8 @@ export function createAuthorizeRouter(
     const separator = upstreamEndpoint.includes('?') ? '&' : '?';
     const redirectUrl = `${upstreamEndpoint}${separator}${params.toString()}`;
     logger.debug('authorize redirect', { target: redirectUrl });
+    if (Object.keys(resourceLabel).length > 0) config.redirectsTotal.inc(resourceLabel);
+    else config.redirectsTotal.inc();
     res.redirect(302, redirectUrl);
   });
 

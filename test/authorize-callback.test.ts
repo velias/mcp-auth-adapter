@@ -26,6 +26,7 @@ function createTestApp(options: {
     getSecrets: () => secrets,
     getUpstreamIssuer: () => upstreamIssuer,
     getUpstreamSupportsIss: () => upstreamSupportsIss,
+    rejectedTotal: { inc() {} },
   }, createLogger(false)));
   return app;
 }
@@ -251,6 +252,29 @@ describe('GET /authorize/callback', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error_description).toContain('code');
+    });
+  });
+
+  describe('rejection counter', () => {
+    it('increments rejectedTotal with state_missing reason', async () => {
+      const incSpy = jest.fn();
+      const app = express();
+      app.use(createAuthorizeCallbackRouter({
+        baseUrl: BASE_URL,
+        getSecrets: () => [SECRET],
+        getUpstreamIssuer: () => UPSTREAM_ISSUER,
+        getUpstreamSupportsIss: () => false,
+        rejectedTotal: { inc: incSpy },
+      }, createLogger(false)));
+
+      await request(app)
+        .get('/authorize/callback')
+        .query({ code: 'CODE' });
+
+      expect(incSpy).toHaveBeenCalledWith({
+        route: '/authorize/callback',
+        reason: 'state_missing',
+      });
     });
   });
 

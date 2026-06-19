@@ -145,7 +145,7 @@ async function main(): Promise<void> {
       dcrProxy: config.proxyDcrEndpoint ? 'enabled' : 'disabled',
       cimdProxy: config.cimdEnabled ? 'enabled (EXPERIMENTAL)' : 'disabled',
       allowedRedirectUris: config.allowedRedirectUris.length,
-      resourceValidation: config.requireResource ? 'enforced' : (config.allowedResources.length > 0 ? 'allowlist' : 'passthrough'),
+      resourceValidation: config.requireResource ? 'enforced' : (config.allowedResources.length > 0 ? `allowlist[${config.allowedResources.length}]` : 'passthrough'),
       metrics: config.metricsEnabled ? 'enabled' : 'disabled',
       refreshMinutes: config.wellKnownRefreshMinutes,
       debug: config.debug,

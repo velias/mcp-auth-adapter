@@ -3,12 +3,24 @@ import express from 'express';
 import { Logger, requestMeta } from '../logger';
 import { readResponseWithLimit } from '../fetch-utils';
 import { isCimdClientId, validateCimdUrl, resolveUpstreamClientId, sanitizeForError } from '../cimd';
-import { matchesRedirectPattern, checkResourceParam, ResourceConfig } from '../uri-validation';
+import { matchesRedirectPattern, checkResourceParam, matchedResourcePattern, ResourceConfig } from '../uri-validation';
 import { IMetricsRegistry, ICounter, IHistogram } from '../metrics';
 
+const ROUTE = '/token';
 const TOKEN_UPSTREAM_TIMEOUT_MS = 10000;
 const TOKEN_UPSTREAM_MAX_RESPONSE_BYTES = 64 * 1024;
 const RELAY_HEADERS = ['content-type', 'cache-control', 'pragma'];
+
+const GRANT_TYPE_LABELS: Record<string, string> = {
+  'authorization_code': 'authorization_code',
+  'refresh_token': 'refresh_token',
+  'client_credentials': 'client_credentials',
+  'urn:ietf:params:oauth:grant-type:jwt-bearer': 'jwt_bearer',
+};
+
+function grantTypeLabel(gt: string): string | undefined {
+  return GRANT_TYPE_LABELS[gt];
+}
 
 export interface TokenRouterConfig extends ResourceConfig {
   getUpstreamTokenEndpoint: () => string;
@@ -17,6 +29,7 @@ export interface TokenRouterConfig extends ResourceConfig {
   metricsRegistry?: IMetricsRegistry;
   redirectBaseUrl?: string;
   redirectAllowedUris?: string[];
+  rejectedTotal: ICounter;
 }
 
 export function createTokenRouter(
@@ -33,6 +46,7 @@ export function createTokenRouter(
   router.post('/token', (req: Request, res: Response, next) => {
     const contentType = req.get('content-type') ?? '';
     if (!contentType.includes('application/x-www-form-urlencoded')) {
+      config.rejectedTotal.inc({ route: ROUTE, reason: 'content_type_invalid' });
       res.status(415).json({
         error: 'invalid_request',
         error_description: 'Content-Type must be application/x-www-form-urlencoded',
@@ -71,13 +85,24 @@ async function handleTokenRequest(
       resource: resource || 'MISSING',
     });
 
+    const gtLabel = grantTypeLabel(grantType);
+    const resourceLabel: Record<string, string> = config.allowedResources.length > 0
+      ? { resource: matchedResourcePattern(resource, config.allowedResources) }
+      : {};
+
     // RFC 8707 resource parameter validation (skip for refresh_token per RFC 8707 §2.2)
     if (grantType !== 'refresh_token') {
       const resourceError = checkResourceParam(resource, config);
       if (resourceError) {
+        config.rejectedTotal.inc({
+          route: ROUTE,
+          reason: resourceError.reason,
+          ...(gtLabel ? { grant_type: gtLabel } : {}),
+          ...resourceLabel,
+        });
         res.status(400).json({
           error: 'invalid_request',
-          error_description: resourceError,
+          error_description: resourceError.description,
         });
         return;
       }
@@ -95,6 +120,12 @@ async function handleTokenRequest(
     if (isCimd) {
       const urlValidation = validateCimdUrl(clientId);
       if (!urlValidation.valid) {
+        config.rejectedTotal.inc({
+          route: ROUTE,
+          reason: 'cimd_url_invalid',
+          ...(gtLabel ? { grant_type: gtLabel } : {}),
+          ...resourceLabel,
+        });
         res.status(400).json({
           error: 'invalid_client',
           error_description: `Invalid CIMD client_id URL: ${sanitizeForError(urlValidation.reason)}`,
@@ -110,6 +141,12 @@ async function handleTokenRequest(
 
       if (!upstreamClientId) {
         logger.debug('token proxy: unknown CIMD client rejected', { clientId: clientId.slice(0, 80) });
+        config.rejectedTotal.inc({
+          route: ROUTE,
+          reason: 'cimd_client_unknown',
+          ...(gtLabel ? { grant_type: gtLabel } : {}),
+          ...resourceLabel,
+        });
         res.status(403).json({
           error: 'invalid_client',
           error_description: `Unknown CIMD client: ${sanitizeForError(clientId)}`,
@@ -123,6 +160,12 @@ async function handleTokenRequest(
     // Redirect URI validation and rewriting for authorization_code grants
     if (config.redirectBaseUrl && grantType === 'authorization_code') {
       if (!redirectUri) {
+        config.rejectedTotal.inc({
+          route: ROUTE,
+          reason: 'redirect_uri_missing',
+          ...(gtLabel ? { grant_type: gtLabel } : {}),
+          ...resourceLabel,
+        });
         res.status(400).json({
           error: 'invalid_request',
           error_description: 'redirect_uri is required for authorization_code grant',
@@ -136,6 +179,12 @@ async function handleTokenRequest(
           logger.debug('token proxy: redirect_uri rejected', {
             reason: match.reason,
             uri: redirectUri.slice(0, 200),
+          });
+          config.rejectedTotal.inc({
+            route: ROUTE,
+            reason: 'redirect_uri_rejected',
+            ...(gtLabel ? { grant_type: gtLabel } : {}),
+            ...resourceLabel,
           });
           res.status(400).json({
             error: 'invalid_request',
@@ -173,11 +222,13 @@ async function handleTokenRequest(
         signal: AbortSignal.timeout(TOKEN_UPSTREAM_TIMEOUT_MS),
       });
       const fetchDuration = Number(process.hrtime.bigint() - fetchStart) / 1e9;
-      upstreamDuration?.observe(fetchDuration);
-      upstreamStatusCounter?.inc({ status: String(upstreamResponse.status) });
+      const upstreamLabels = { ...(gtLabel ? { grant_type: gtLabel } : {}), ...resourceLabel };
+      upstreamDuration?.observe(fetchDuration, upstreamLabels);
+      upstreamStatusCounter?.inc({ status: String(upstreamResponse.status), ...upstreamLabels });
     } catch (err) {
       const fetchDuration = Number(process.hrtime.bigint() - fetchStart) / 1e9;
-      upstreamDuration?.observe(fetchDuration);
+      const upstreamLabels = { ...(gtLabel ? { grant_type: gtLabel } : {}), ...resourceLabel };
+      upstreamDuration?.observe(fetchDuration, upstreamLabels);
       logger.error('token proxy: upstream request failed', { error: String(err) });
       res.status(502).json({
         error: 'server_error',
