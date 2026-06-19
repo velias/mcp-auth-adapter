@@ -29,7 +29,7 @@ export function createAuthorizeCallbackRouter(
     const stateBlob = str(query.state);
     const upstreamIss = str(query.iss);
 
-    logger.debug('authorize callback request', {
+    if (logger.isDebugEnabled) logger.debug('authorize callback request', {
       ...requestMeta(req),
       code_present: !!code,
       error: error,
@@ -135,7 +135,7 @@ export function createAuthorizeCallbackRouter(
       }
       redirectUrl.searchParams.set('iss', config.baseUrl);
 
-      logger.debug('authorize callback: success redirect', {
+      if (logger.isDebugEnabled) logger.debug('authorize callback: success redirect', {
         target: redirectUrl.href.split('?')[0],
       });
 
@@ -155,7 +155,7 @@ export function createAuthorizeCallbackRouter(
       redirectUrl.searchParams.set('state', payload.state);
     }
 
-    logger.debug('authorize callback: error forwarding', {
+    if (logger.isDebugEnabled) logger.debug('authorize callback: error forwarding', {
       error: error,
     });
 

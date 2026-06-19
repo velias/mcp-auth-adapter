@@ -109,18 +109,20 @@ test/
 - **Single process, in-memory cache.** The upstream OIDC document is fetched at
   startup and refreshed on a `setInterval` (`wellKnownRefreshMinutes`). On
   refresh failure, the previous document is kept.
-- **Middleware order matters.** Health routes are mounted **before**
-  `express.json()` so probes avoid body parsing.
+- **Middleware order matters.** Health routes are mounted **before** compression
+  and `express.json()` so probes skip unnecessary processing. `/metrics` is
+  mounted after compression (responses can be large) but before body parsers.
 - **No explicit feature flags.** All optional features (DCR, authorize proxy,
   CIMD) auto-enable based on the presence of their configuration — see
   "Key responsibilities" above. Exception: `MCP_METRICS_ENABLED` (default
   `true`) explicitly controls the metrics subsystem.
 - **`UpstreamState`** holds the cached well-known document (already
-  filtered/merged for clients), the raw `upstreamAuthorizationEndpoint` URL
-  (used by the authorize redirect), `upstreamTokenEndpoint` (used by the
-  token proxy), `upstreamIssuer` (for RFC 9207 validation), and
-  `upstreamSupportsIss` (derived from upstream metadata, defaults to `false`
-  when the upstream doc cannot be fetched).
+  filtered/merged for clients) plus its pre-serialized JSON string (served
+  directly by the well-known handler without per-request `JSON.stringify`),
+  the raw `upstreamAuthorizationEndpoint` URL (used by the authorize redirect),
+  `upstreamTokenEndpoint` (used by the token proxy), `upstreamIssuer` (for
+  RFC 9207 validation), and `upstreamSupportsIss` (derived from upstream
+  metadata, defaults to `false` when the upstream doc cannot be fetched).
 - **Graceful shutdown.** `SIGTERM`/`SIGINT` set `shuttingDown` (readiness probe
   returns 503), clear the refresh timer, and call `server.close()` to drain
   in-flight requests with a configurable force-exit timeout.
@@ -138,8 +140,11 @@ test/
   missing or incomplete for MCP.
 - **Pre-parsed resource patterns.** Resource allowlist patterns (`ParsedResourcePattern`)
   are parsed once at config time via `parseResourcePatterns()`. Runtime matching
-  in `matchesResourcePattern()` / `matchedResourcePattern()` / `checkResourceParam()`
-  performs only field comparisons — no `new URL()` on patterns per request.
+  in `checkAndMatchResource()` parses the request URI once and returns both the
+  validation result and the matched pattern — no `new URL()` on patterns per
+  request and no duplicate parsing. Legacy standalone helpers
+  (`matchesResourcePattern()`, `matchedResourcePattern()`, `checkResourceParam()`)
+  remain for backward compatibility.
   `ResourceConfig.allowedResources` is `ParsedResourcePattern[]`, not `string[]`.
 - **Metrics subsystem.** `src/metrics.ts` provides zero-dependency Prometheus
   primitives (Counter, Gauge, Histogram) behind `ICounter`/`IGauge`/`IHistogram`
@@ -150,9 +155,33 @@ test/
   exposition format on demand.
 - **Logging.** `src/logger.ts` provides a structured key=value logger writing
   to stdout (info, debug) and stderr (warn, error). `createLogger(debugEnabled)`
-  returns a `Logger` with `info`, `warn`, `error`, `debug` methods. Debug logs
-  are gated by `MCP_DEBUG`. Never use `console.*` directly — always use the
-  `logger` instance.
+  returns a `Logger` with `info`, `warn`, `error`, `debug` methods and an
+  `isDebugEnabled` flag for call-site guards. Debug logs are gated by
+  `MCP_DEBUG`. Never use `console.*` directly — always use the `logger`
+  instance.
+
+## Performance conventions
+
+- **Config-time over request-time.** Move expensive work (regex compilation,
+  `Set` construction from config arrays, `new URL()` on static patterns, JSON
+  serialization of stable documents) to startup or router/middleware creation
+  time. Request handlers should use pre-computed structures, not rebuild them
+  per call. The existing `parseResourcePatterns()` → `ParsedResourcePattern[]`
+  pattern is the model: parse once at config load, match with field comparisons
+  at runtime.
+- **One parse per input per request.** When a request value (e.g. a URI) needs
+  both validation and a derived result (metrics label, pattern match), do both
+  in a single pass. Avoid calling separate helpers that each re-parse the same
+  input independently (e.g. two `new URL()` calls on the same string).
+- **Middleware ordering.** Health probes are mounted **before** compression and
+  body parsers (tiny fixed responses, high frequency). `/metrics` is mounted
+  after compression (responses can be large) but before body parsers. Functional
+  routes come after both. When adding new operational endpoints, consider whether
+  they benefit from compression.
+- **Debug log argument cost.** `logger.debug()` gates on `debugEnabled` *inside*
+  the function — call-site arguments (object spreads, `requestMeta(req)`, string
+  slicing) are evaluated even when debug is off. Guard with
+  `if (logger.isDebugEnabled)` when constructing non-trivial metadata objects.
 
 ## Configuration
 
@@ -239,7 +268,8 @@ npm run lint:fix     # ESLint auto-fix
     `GRANT_TYPE_LABELS` — the only place to update.
   - **`resource` label pattern**: Uses matched allowlist pattern, not raw URI.
     Only emitted when `allowedResources` is configured. When empty, omit the
-    label entirely. Use `matchedResourcePattern()` from `uri-validation.ts`.
+    label entirely. Use `checkAndMatchResource()` from `uri-validation.ts`
+    (returns both validation result and matched pattern in one pass).
 - OAuth error responses follow RFC format (`{ error, error_description }`).
 - **Router config objects** — Router factory functions accept a single flat
   typed config interface + `logger`. The config interface `extends` shared
@@ -259,8 +289,7 @@ npm run lint:fix     # ESLint auto-fix
   - `src/uri-validation.ts` — `validateRedirectUriSecurity()`,
     `validateResourceUri()`, `matchesRedirectPattern()`,
     `parseResourcePatterns()` (config-time compiler),
-    `matchesResourcePattern()`, `matchedResourcePattern()`,
-    `checkResourceParam()`
+    `checkAndMatchResource()` (single-pass validation + pattern match)
   - `src/state-signer.ts` — `signState()`, `verifyState()`
   - `src/cimd.ts` — validation, resolution, caching used by both authorize and
     token routes

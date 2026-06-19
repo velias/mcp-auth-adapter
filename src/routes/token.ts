@@ -3,7 +3,7 @@ import express from 'express';
 import { Logger, requestMeta } from '../logger';
 import { readResponseWithLimit } from '../fetch-utils';
 import { isCimdClientId, validateCimdUrl, resolveUpstreamClientId, sanitizeForError } from '../cimd';
-import { matchesRedirectPattern, checkResourceParam, matchedResourcePattern, ResourceConfig } from '../uri-validation';
+import { matchesRedirectPattern, checkAndMatchResource, ResourceConfig } from '../uri-validation';
 import { IMetricsRegistry, ICounter, IHistogram } from '../metrics';
 
 const ROUTE = '/token';
@@ -77,7 +77,7 @@ async function handleTokenRequest(
     const redirectUri = str(rawBody.redirect_uri);
     const resource = str(rawBody.resource);
 
-    logger.debug('token proxy request', {
+    if (logger.isDebugEnabled) logger.debug('token proxy request', {
       ...requestMeta(req),
       clientId: clientId.startsWith('https://') ? clientId.slice(0, 80) : clientId,
       grantType,
@@ -86,13 +86,12 @@ async function handleTokenRequest(
     });
 
     const gtLabel = grantTypeLabel(grantType);
-    const resourceLabel: Record<string, string> = config.allowedResources.length > 0
-      ? { resource: matchedResourcePattern(resource, config.allowedResources) }
-      : {};
 
     // RFC 8707 resource parameter validation (skip for refresh_token per RFC 8707 §2.2)
+    let resourceLabel: Record<string, string> = {};
     if (grantType !== 'refresh_token') {
-      const resourceError = checkResourceParam(resource, config);
+      const { error: resourceError, matchedPattern } = checkAndMatchResource(resource, config);
+      resourceLabel = matchedPattern ? { resource: matchedPattern } : {};
       if (resourceError) {
         config.rejectedTotal.inc({
           route: ROUTE,
@@ -140,7 +139,7 @@ async function handleTokenRequest(
       );
 
       if (!upstreamClientId) {
-        logger.debug('token proxy: unknown CIMD client rejected', { clientId: clientId.slice(0, 80) });
+        if (logger.isDebugEnabled) logger.debug('token proxy: unknown CIMD client rejected', { clientId: clientId.slice(0, 80) });
         config.rejectedTotal.inc({
           route: ROUTE,
           reason: 'cimd_client_unknown',
@@ -176,7 +175,7 @@ async function handleTokenRequest(
       if (!isCimd) {
         const match = matchesRedirectPattern(redirectUri, config.redirectAllowedUris!);
         if (!match.allowed) {
-          logger.debug('token proxy: redirect_uri rejected', {
+          if (logger.isDebugEnabled) logger.debug('token proxy: redirect_uri rejected', {
             reason: match.reason,
             uri: redirectUri.slice(0, 200),
           });

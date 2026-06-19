@@ -2,6 +2,8 @@
 
 Thank you for considering contributing! This document explains the process and guidelines for contributing to this project.
 
+For detailed architecture notes, performance conventions, and implementation patterns, see [AGENTS.md](AGENTS.md) — it is maintained as the single source of truth for how the codebase is structured and why.
+
 ## How to Contribute
 
 ### Reporting Bugs
@@ -20,7 +22,7 @@ Thank you for considering contributing! This document explains the process and g
 
 1. **Every PR must reference a GitHub issue.** If one doesn't exist, create it first.
 2. Fork the repository and create a branch from `main`.
-3. Make your changes (see guidelines below).
+3. Make your changes (see [AGENTS.md](AGENTS.md) for code style and architecture conventions).
 4. Ensure all checks pass locally:
    ```bash
    npm run lint
@@ -79,7 +81,7 @@ npm test                # Jest + supertest (no network, no server)
 npm test -- --coverage  # Run with coverage report
 ```
 
-Tests use [supertest](https://github.com/ladds/supertest) against the Express app with mocked upstream docs — no server started, no network calls. Each test file corresponds to one route module.
+Tests use [supertest](https://github.com/ladjs/supertest) against the Express app with mocked upstream docs — no server started, no network calls. Each test file corresponds to one route module.
 
 The `--coverage` flag prints a summary table to the terminal and generates a detailed HTML report in `coverage/lcov-report/index.html` that you can open in a browser. Coverage is also reported automatically on pull requests by CI.
 
@@ -92,28 +94,9 @@ npm run lint:fix        # Auto-fix
 
 ESLint uses [typescript-eslint](https://typescript-eslint.io/) with type-aware rules (`recommendedTypeChecked`). Config: `eslint.config.mjs`.
 
-## Code Style
+## Code Style, Testing & Architecture
 
-- **TypeScript strict mode.** No `any` in production code.
-- **Structured logging** — use `logger` from `src/logger.ts`, not `console.*`.
-  - `info` — lifecycle events (startup, shutdown, upstream refresh success).
-  - `warn` — recoverable failures (upstream fetch failed, config conflicts, IdP compatibility issues).
-  - `error` — unrecoverable or unexpected failures (unhandled request errors, fatal startup errors).
-  - `debug` — per-request detail (method, path, IP, user-agent) — only emitted when `MCP_DEBUG=true`.
-- **Metrics** — the adapter uses zero-dependency Prometheus metrics (`src/metrics.ts`). When adding instrumentation:
-  - Prefix application metrics with `mcp_auth_` (e.g. `mcp_auth_new_feature_total`).
-  - Keep label cardinality bounded — use fixed route patterns or enum values, never user-supplied input.
-  - To instrument a new route: mount `metricsMiddleware` alongside the router in `app.ts`.
-  - To add domain-specific metrics: accept `IMetricsRegistry` from the caller, create counters/gauges/histograms from it. The no-op registry ensures zero overhead when metrics are disabled.
-  - Do not add external metrics dependencies — the zero-dependency approach is deliberate.
-- **OAuth error responses** follow RFC format (`{ error, error_description }`).
-- **Tests** — upstream OIDC docs are mocked inline in each test file. Auto-enable behavior (404 when a feature is not configured) must be covered.
-
-## Testing Guidelines
-
-- Every new feature or bug fix should include tests.
-- Tests must not make real network calls or start a listening server.
-- Each route module has a corresponding test file in `test/`.
+See the **Code style**, **Testing conventions**, and **Performance conventions** sections in [AGENTS.md](AGENTS.md) for the full guidelines (TypeScript strict mode, structured logging, metrics conventions, OAuth error format, testing patterns, etc.).
 
 ## Releases
 

@@ -23,6 +23,7 @@ import {
  */
 export interface UpstreamState {
   wellKnownDocument: Record<string, unknown>;
+  wellKnownDocumentSerialized: string;
   upstreamAuthorizationEndpoint: string;
   upstreamTokenEndpoint: string;
   upstreamIssuer: string;
@@ -43,8 +44,10 @@ export function buildUpstreamState(
   config: AppConfig,
   fromFallback = false,
 ): UpstreamState {
+  const wellKnownDocument = buildWellKnownDocument(upstreamDoc, config);
   return {
-    wellKnownDocument: buildWellKnownDocument(upstreamDoc, config),
+    wellKnownDocument,
+    wellKnownDocumentSerialized: JSON.stringify(wellKnownDocument),
     upstreamAuthorizationEndpoint: upstreamDoc.authorization_endpoint as string,
     upstreamTokenEndpoint: upstreamDoc.token_endpoint as string,
     upstreamIssuer: (upstreamDoc.issuer as string) ?? config.upstreamSsoUrl,
@@ -86,13 +89,12 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
   const app = express();
   app.disable('x-powered-by');
 
-  app.use(compression());
   app.use(createHealthRouter(isShuttingDown));
+  app.use(compression());
 
   if (config.metricsEnabled) {
     app.use(createMetricsRouter(metricsRegistry));
   }
-
   app.use(express.json({ limit: '16kb' }));
 
   let httpMetrics: HttpMetrics | undefined;
@@ -105,7 +107,7 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
 
   const metricsMiddleware = httpMetrics ? createHttpMetricsMiddleware(httpMetrics) : undefined;
 
-  const wellKnownRouter = createWellKnownRouter(() => state.wellKnownDocument, logger, config.wellKnownRefreshMinutes);
+  const wellKnownRouter = createWellKnownRouter(() => state.wellKnownDocumentSerialized, logger, config.wellKnownRefreshMinutes);
   if (metricsMiddleware) app.use(metricsMiddleware, wellKnownRouter);
   else app.use(wellKnownRouter);
 
@@ -159,15 +161,12 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
 
     // Callback router for iss interception
     if (config.authStateSecret) {
-      const secrets = (): Buffer[] => {
-        const result = [config.authStateSecret!];
-        if (config.authStateSecretPrevious) result.push(config.authStateSecretPrevious);
-        return result;
-      };
+      const secretsArray: Buffer[] = [config.authStateSecret];
+      if (config.authStateSecretPrevious) secretsArray.push(config.authStateSecretPrevious);
 
       const callbackRouter = createAuthorizeCallbackRouter({
         baseUrl: config.baseUrl,
-        getSecrets: secrets,
+        getSecrets: () => secretsArray,
         getUpstreamIssuer: () => state.upstreamIssuer,
         getUpstreamSupportsIss: () => state.upstreamSupportsIss,
         rejectedTotal,

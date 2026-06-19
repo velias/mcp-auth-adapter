@@ -7,7 +7,7 @@ import {
   validateRedirectUri,
   sanitizeForError,
 } from '../cimd';
-import { matchesRedirectPattern, checkResourceParam, matchedResourcePattern, ResourceConfig } from '../uri-validation';
+import { matchesRedirectPattern, checkAndMatchResource, ResourceConfig } from '../uri-validation';
 import { ICounter } from '../metrics';
 import { signState } from '../state-signer';
 
@@ -16,6 +16,8 @@ const ROUTE = '/authorize';
 export interface AuthScopeConfig {
   removed?: string[];
   preserved?: string[];
+  removedSet?: Set<string>;
+  preservedSet?: Set<string>;
 }
 
 export interface AuthorizeRouterConfig extends AuthScopeConfig, ResourceConfig {
@@ -36,12 +38,14 @@ export function filterScopes(
 ): string | null {
   const scopes = scopeParam.split(' ').filter(Boolean);
   let filtered: string[];
-  if (scopeConfig.preserved && scopeConfig.preserved.length > 0) {
-    const set = new Set(scopeConfig.preserved);
-    filtered = scopes.filter(s => set.has(s));
-  } else if (scopeConfig.removed && scopeConfig.removed.length > 0) {
-    const set = new Set(scopeConfig.removed);
-    filtered = scopes.filter(s => !set.has(s));
+  const preservedSet = scopeConfig.preservedSet
+    ?? (scopeConfig.preserved?.length ? new Set(scopeConfig.preserved) : undefined);
+  const removedSet = scopeConfig.removedSet
+    ?? (scopeConfig.removed?.length ? new Set(scopeConfig.removed) : undefined);
+  if (preservedSet) {
+    filtered = scopes.filter(s => preservedSet.has(s));
+  } else if (removedSet) {
+    filtered = scopes.filter(s => !removedSet.has(s));
   } else {
     return scopeParam;
   }
@@ -54,6 +58,12 @@ export function createAuthorizeRouter(
 ): Router {
   const router = Router();
 
+  const scopeConfig: AuthScopeConfig = {
+    ...config,
+    preservedSet: config.preserved?.length ? new Set(config.preserved) : undefined,
+    removedSet: config.removed?.length ? new Set(config.removed) : undefined,
+  };
+
   router.get('/authorize', async (req: Request, res: Response) => {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(req.query)) {
@@ -63,11 +73,12 @@ export function createAuthorizeRouter(
     }
 
     const resource = params.get('resource') || '';
-    const resourceLabel: Record<string, string> = config.allowedResources.length > 0
-      ? { resource: matchedResourcePattern(resource, config.allowedResources) }
+    const { error: resourceError, matchedPattern } = checkAndMatchResource(resource, config);
+    const resourceLabel: Record<string, string> = matchedPattern
+      ? { resource: matchedPattern }
       : {};
 
-    logger.debug('authorize request', {
+    if (logger.isDebugEnabled) logger.debug('authorize request', {
       ...requestMeta(req),
       scope: params.get('scope'),
       clientId: params.get('client_id'),
@@ -77,7 +88,6 @@ export function createAuthorizeRouter(
     });
 
     // RFC 8707 resource parameter validation
-    const resourceError = checkResourceParam(resource, config);
     if (resourceError) {
       config.rejectedTotal.inc({ route: ROUTE, reason: resourceError.reason, ...resourceLabel });
       res.status(400).json({
@@ -90,7 +100,7 @@ export function createAuthorizeRouter(
     // Strip unsupported response_mode
     const responseMode = params.get('response_mode');
     if (responseMode && responseMode !== 'query') {
-      logger.debug('authorize: unsupported response_mode stripped', { responseMode });
+      if (logger.isDebugEnabled) logger.debug('authorize: unsupported response_mode stripped', { responseMode });
       params.delete('response_mode');
     }
 
@@ -111,7 +121,7 @@ export function createAuthorizeRouter(
 
       const upstreamClientId = config.cimdResolve(clientId);
       if (!upstreamClientId) {
-        logger.debug('authorize: unknown CIMD client rejected', { clientId: clientId.slice(0, 80) });
+        if (logger.isDebugEnabled) logger.debug('authorize: unknown CIMD client rejected', { clientId: clientId.slice(0, 80) });
         config.rejectedTotal.inc({ route: ROUTE, reason: 'cimd_client_unknown', ...resourceLabel });
         res.status(403).json({
           error: 'invalid_client',
@@ -164,7 +174,7 @@ export function createAuthorizeRouter(
       if (!isCimd) {
         const match = matchesRedirectPattern(redirectUri, config.stateAllowedRedirectUris!);
         if (!match.allowed) {
-          logger.debug('authorize: redirect_uri rejected', {
+          if (logger.isDebugEnabled) logger.debug('authorize: redirect_uri rejected', {
             reason: match.reason,
             uri: redirectUri.slice(0, 200),
           });
@@ -190,7 +200,7 @@ export function createAuthorizeRouter(
 
     const scope = params.get('scope');
     if (scope) {
-      const filtered = filterScopes(scope, config);
+      const filtered = filterScopes(scope, scopeConfig);
       if (filtered !== null) {
         params.set('scope', filtered);
       } else {
@@ -201,7 +211,7 @@ export function createAuthorizeRouter(
     const upstreamEndpoint = config.getUpstreamAuthEndpoint();
     const separator = upstreamEndpoint.includes('?') ? '&' : '?';
     const redirectUrl = `${upstreamEndpoint}${separator}${params.toString()}`;
-    logger.debug('authorize redirect', { target: redirectUrl });
+    if (logger.isDebugEnabled) logger.debug('authorize redirect', { target: redirectUrl });
     if (Object.keys(resourceLabel).length > 0) config.redirectsTotal.inc(resourceLabel);
     else config.redirectsTotal.inc();
     res.redirect(302, redirectUrl);
