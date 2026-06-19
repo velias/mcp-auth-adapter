@@ -110,7 +110,7 @@ Environment variables are used. All variables are prefixed with `MCP_`. A `.env`
 | `MCP_PROXY_CIMD_CACHE_MINUTES` | No | `30` | Cache TTL (in minutes) for validated CIMD metadata documents. |
 | | | | **Resource Parameter Validation (RFC 8707)** |
 | `MCP_PROXY_AUTH_REQUIRE_RESOURCE` | No | `false` | Reject `/authorize` and `/token` requests missing the RFC 8707 `resource` parameter. Enable for strict MCP spec compliance; leave disabled if MCP clients don't yet include it. |
-| `MCP_PROXY_AUTH_ALLOWED_RESOURCES` | No | -- | Comma-separated allowed resource URI patterns. Trailing `*` = prefix match, no `*` = exact match. When set, `resource` must match a pattern; unmatched values are rejected with 400. |
+| `MCP_PROXY_AUTH_ALLOWED_RESOURCES` | No | -- | Comma-separated allowed resource URI patterns. Trailing `*` = prefix match, `*.domain.com` = domain wildcard (matches domain and all subdomains), no `*` = exact match. When set, `resource` must match a pattern; unmatched values are rejected with 400. |
 | | | | **Observability** |
 | `MCP_METRICS_ENABLED` | No | `true` | Enable Prometheus metrics endpoint (`GET /metrics`) and request instrumentation. Set to `false` to disable (zero overhead). |
 | `MCP_DEBUG` | No | `false` | Emit structured debug logs for every request. |
@@ -190,6 +190,9 @@ MCP_DEBUG=true
 # Strict — require resource parameter and restrict to known MCP servers
 MCP_PROXY_AUTH_REQUIRE_RESOURCE=true
 MCP_PROXY_AUTH_ALLOWED_RESOURCES=https://mcp-tools.example.com/*,https://mcp-data.example.com/mcp
+
+# Domain wildcard — match a domain and all its subdomains
+MCP_PROXY_AUTH_ALLOWED_RESOURCES=https://*.corp.example.com/*,https://mcp-data.example.com/mcp
 ```
 
 ### Notes
@@ -497,12 +500,16 @@ Compatible with:
 | `mcp_auth_cimd_cache_operations_total` | counter | `result` | CIMD cache lookups (`hit` / `miss`); only when CIMD is enabled |
 | `mcp_auth_cimd_cache_evictions_total` | counter | -- | CIMD cache evictions |
 | `mcp_auth_cimd_cache_size` | gauge | -- | Current CIMD cache entry count |
-| `mcp_auth_token_proxy_upstream_duration_seconds` | histogram | -- | Token proxy upstream request duration; only when token proxy is active |
-| `mcp_auth_token_proxy_upstream_status_total` | counter | `status` | Token proxy upstream response status codes |
+| `mcp_auth_request_rejected_total` | counter | `route`, `reason`, `grant_type` (token only), `resource` (when allowlist configured) | Requests rejected by input validation |
+| `mcp_auth_authorize_redirects_total` | counter | `resource` (when allowlist configured) | Successful authorize redirects to upstream |
+| `mcp_auth_token_proxy_upstream_duration_seconds` | histogram | `grant_type`, `resource` (when allowlist configured) | Token proxy upstream request duration; only when token proxy is active |
+| `mcp_auth_token_proxy_upstream_status_total` | counter | `status`, `grant_type`, `resource` (when allowlist configured) | Token proxy upstream response status codes |
 | `process_uptime_seconds` | gauge | -- | Process uptime |
 | `process_resident_memory_bytes` | gauge | -- | Resident memory size |
 | `process_heap_used_bytes` | gauge | -- | V8 heap used |
 | `nodejs_eventloop_lag_seconds` | gauge | -- | Event loop lag (mean) |
+
+**Label notes:** The `resource` label uses the **matched allowlist pattern** (not the raw URI) to ensure bounded cardinality. It is only present when `MCP_PROXY_AUTH_ALLOWED_RESOURCES` is configured; otherwise it is omitted entirely. The `grant_type` label only appears for recognized grant types (`authorization_code`, `refresh_token`, `client_credentials`, `jwt_bearer`); unrecognized values are omitted to prevent cardinality attacks.
 
 ### Instrumentation scope
 

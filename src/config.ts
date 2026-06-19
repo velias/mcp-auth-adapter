@@ -1,3 +1,5 @@
+import { ParsedResourcePattern, parseResourcePatterns } from './uri-validation';
+
 export interface AppConfig {
   baseUrl: string;
   port: number;
@@ -21,7 +23,7 @@ export interface AppConfig {
   authStateTtlSeconds: number;
   allowedRedirectUris: string[];
   requireResource: boolean;
-  allowedResources: string[];
+  allowedResources: ParsedResourcePattern[];
 }
 
 function requireEnv(name: string): string {
@@ -127,10 +129,19 @@ function parseAllowedResources(name: string): string[] {
   if (!raw || raw.trim() === '') return [];
   const patterns = raw.split(',').map((s) => s.trim()).filter(Boolean);
   for (const pattern of patterns) {
-    const testUri = pattern.endsWith('*') ? pattern.slice(0, -1) : pattern;
+    let testUri = pattern.endsWith('*') ? pattern.slice(0, -1) : pattern;
+    // Domain wildcard: https://*.example.com/... → replace *. for scheme validation
+    testUri = testUri.replace('://*.', '://wildcard-placeholder.');
     if (!testUri.startsWith('https://') && !testUri.startsWith('http://')) {
       throw new Error(
         `${name} contains invalid pattern "${pattern}": must use http:// or https:// scheme (RFC 8707)`,
+      );
+    }
+    // Reject bare wildcard host (https://*/* or https://*) — must be *.domain
+    const hostMatch = pattern.match(/^https?:\/\/([^/:]+)/);
+    if (hostMatch && (hostMatch[1] === '*' || hostMatch[1] === '*.')) {
+      throw new Error(
+        `${name} contains invalid pattern "${pattern}": wildcard host must include a base domain (e.g. *.example.com), bare * is not allowed`,
       );
     }
   }
@@ -248,6 +259,6 @@ export function loadConfig(): AppConfig {
     authStateTtlSeconds: authStateTtlMinutes * 60,
     allowedRedirectUris,
     requireResource: parseBoolEnv('MCP_PROXY_AUTH_REQUIRE_RESOURCE', false),
-    allowedResources: parseAllowedResources('MCP_PROXY_AUTH_ALLOWED_RESOURCES'),
+    allowedResources: parseResourcePatterns(parseAllowedResources('MCP_PROXY_AUTH_ALLOWED_RESOURCES')),
   };
 }

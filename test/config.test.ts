@@ -618,13 +618,13 @@ describe('loadConfig — resource parameter config', () => {
 
   it('allowedResources parses comma-separated patterns', () => {
     withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'https://mcp.example.com/*,https://api.example.com/mcp' }, () => {
-      expect(loadConfig().allowedResources).toEqual(['https://mcp.example.com/*', 'https://api.example.com/mcp']);
+      expect(loadConfig().allowedResources.map(p => p.original)).toEqual(['https://mcp.example.com/*', 'https://api.example.com/mcp']);
     });
   });
 
   it('allowedResources trims whitespace', () => {
     withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: ' https://mcp.example.com/* , https://api.example.com/mcp ' }, () => {
-      expect(loadConfig().allowedResources).toEqual(['https://mcp.example.com/*', 'https://api.example.com/mcp']);
+      expect(loadConfig().allowedResources.map(p => p.original)).toEqual(['https://mcp.example.com/*', 'https://api.example.com/mcp']);
     });
   });
 
@@ -642,7 +642,7 @@ describe('loadConfig — resource parameter config', () => {
 
   it('allowedResources accepts http:// patterns (for dev)', () => {
     withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'http://localhost:3000/*' }, () => {
-      expect(loadConfig().allowedResources).toEqual(['http://localhost:3000/*']);
+      expect(loadConfig().allowedResources.map(p => p.original)).toEqual(['http://localhost:3000/*']);
     });
   });
 
@@ -650,8 +650,50 @@ describe('loadConfig — resource parameter config', () => {
     withEnv({ MCP_PROXY_AUTH_REQUIRE_RESOURCE: 'true', MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'https://mcp.example.com/*' }, () => {
       const cfg = loadConfig();
       expect(cfg.requireResource).toBe(true);
-      expect(cfg.allowedResources).toEqual(['https://mcp.example.com/*']);
+      expect(cfg.allowedResources.map(p => p.original)).toEqual(['https://mcp.example.com/*']);
       expect(cfg.proxyAuthEndpoint).toBe(false);
+    });
+  });
+
+  it('allowedResources accepts domain wildcard + path wildcard', () => {
+    withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'https://*.corp.example.com/*' }, () => {
+      expect(loadConfig().allowedResources.map(p => p.original)).toEqual(['https://*.corp.example.com/*']);
+    });
+  });
+
+  it('allowedResources accepts domain wildcard with exact path', () => {
+    withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'https://*.corp.example.com/api/v1' }, () => {
+      expect(loadConfig().allowedResources.map(p => p.original)).toEqual(['https://*.corp.example.com/api/v1']);
+    });
+  });
+
+  it('allowedResources accepts http domain wildcard', () => {
+    withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'http://*.corp.example.com/*' }, () => {
+      expect(loadConfig().allowedResources.map(p => p.original)).toEqual(['http://*.corp.example.com/*']);
+    });
+  });
+
+  it('allowedResources rejects domain wildcard without scheme', () => {
+    withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: '*.corp.example.com/*' }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_PROXY_AUTH_ALLOWED_RESOURCES.*http:\/\/ or https:\/\//);
+    });
+  });
+
+  it('allowedResources rejects bare wildcard host https://*/*', () => {
+    withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'https://*/*' }, () => {
+      expect(() => loadConfig()).toThrow(/bare \* is not allowed/);
+    });
+  });
+
+  it('allowedResources rejects bare wildcard host https://*', () => {
+    withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'https://*' }, () => {
+      expect(() => loadConfig()).toThrow(/bare \* is not allowed/);
+    });
+  });
+
+  it('allowedResources rejects *. without domain', () => {
+    withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'https://*./*' }, () => {
+      expect(() => loadConfig()).toThrow(/bare \* is not allowed/);
     });
   });
 });

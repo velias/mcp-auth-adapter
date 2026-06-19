@@ -66,6 +66,15 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
 
   const metricsRegistry = createMetricsRegistry(config.metricsEnabled);
 
+  const rejectedTotal = metricsRegistry.createCounter(
+    'mcp_auth_request_rejected_total',
+    'Requests rejected by input validation',
+  );
+  const authorizeRedirectsTotal = metricsRegistry.createCounter(
+    'mcp_auth_authorize_redirects_total',
+    'Successful authorize redirects to upstream',
+  );
+
   let shuttingDown = false;
   const setShuttingDown = () => { shuttingDown = true; };
   const isShuttingDown = () => shuttingDown;
@@ -101,7 +110,7 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
   else app.use(wellKnownRouter);
 
   if (config.proxyDcrEndpoint) {
-    const registerRouter = createRegisterRouter(config, logger);
+    const registerRouter = createRegisterRouter(config, logger, rejectedTotal);
     if (metricsMiddleware) app.use(metricsMiddleware, registerRouter);
     else app.use(registerRouter);
   }
@@ -142,6 +151,8 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
       stateSecret: config.authStateSecret,
       stateTtlSeconds: config.authStateTtlSeconds,
       stateAllowedRedirectUris: config.authStateSecret ? config.allowedRedirectUris : undefined,
+      rejectedTotal,
+      redirectsTotal: authorizeRedirectsTotal,
     }, logger);
     if (metricsMiddleware) app.use(metricsMiddleware, authorizeRouter);
     else app.use(authorizeRouter);
@@ -159,6 +170,7 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
         getSecrets: secrets,
         getUpstreamIssuer: () => state.upstreamIssuer,
         getUpstreamSupportsIss: () => state.upstreamSupportsIss,
+        rejectedTotal,
       }, logger);
       if (metricsMiddleware) app.use(metricsMiddleware, callbackRouter);
       else app.use(callbackRouter);
@@ -174,6 +186,7 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
       redirectAllowedUris: config.authStateSecret ? config.allowedRedirectUris : undefined,
       requireResource: config.requireResource,
       allowedResources: config.allowedResources,
+      rejectedTotal,
     }, logger);
     if (metricsMiddleware) app.use(metricsMiddleware, tokenRouter);
     else app.use(tokenRouter);

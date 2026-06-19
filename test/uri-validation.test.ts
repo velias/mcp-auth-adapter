@@ -1,4 +1,6 @@
-import { validateRedirectUriSecurity, matchesRedirectPattern, validateResourceUri } from '../src/uri-validation';
+import { validateRedirectUriSecurity, matchesRedirectPattern, validateResourceUri, matchesResourcePattern, matchedResourcePattern, checkResourceParam, parseResourcePatterns } from '../src/uri-validation';
+
+const p = parseResourcePatterns;
 
 describe('validateRedirectUriSecurity', () => {
   it('accepts a valid http URI', () => {
@@ -178,5 +180,152 @@ describe('validateResourceUri', () => {
   it('rejects control characters', () => {
     const result = validateResourceUri('https://mcp.example.com/\x00');
     expect(result).toEqual({ valid: false, reason: 'contains control characters' });
+  });
+});
+
+describe('matchesResourcePattern', () => {
+  it('matches exact host + exact path', () => {
+    expect(matchesResourcePattern('https://api.example.com/mcp', p(['https://api.example.com/mcp'])))
+      .toEqual({ allowed: true });
+  });
+
+  it('matches exact host + trailing * path prefix', () => {
+    expect(matchesResourcePattern('https://api.example.com/v1/tools', p(['https://api.example.com/*'])))
+      .toEqual({ allowed: true });
+  });
+
+  it('*.example.com matches example.com (bare domain)', () => {
+    expect(matchesResourcePattern('https://example.com/api', p(['https://*.example.com/*'])))
+      .toEqual({ allowed: true });
+  });
+
+  it('*.example.com matches sub.example.com (single subdomain)', () => {
+    expect(matchesResourcePattern('https://sub.example.com/api', p(['https://*.example.com/*'])))
+      .toEqual({ allowed: true });
+  });
+
+  it('*.example.com matches a.b.example.com (multi-level subdomain)', () => {
+    expect(matchesResourcePattern('https://a.b.example.com/api', p(['https://*.example.com/*'])))
+      .toEqual({ allowed: true });
+  });
+
+  it('*.example.com does NOT match notexample.com (suffix attack)', () => {
+    expect(matchesResourcePattern('https://notexample.com/api', p(['https://*.example.com/*'])))
+      .toEqual({ allowed: false, reason: 'no matching pattern' });
+  });
+
+  it('*.example.com does NOT match fakeexample.com (no dot boundary)', () => {
+    expect(matchesResourcePattern('https://fakeexample.com/api', p(['https://*.example.com/*'])))
+      .toEqual({ allowed: false, reason: 'no matching pattern' });
+  });
+
+  it('domain wildcard + path prefix combined', () => {
+    expect(matchesResourcePattern('https://sub.example.com/api/v1', p(['https://*.example.com/api/*'])))
+      .toEqual({ allowed: true });
+  });
+
+  it('domain wildcard without trailing * matches exact path', () => {
+    expect(matchesResourcePattern('https://sub.example.com/', p(['https://*.example.com'])))
+      .toEqual({ allowed: true });
+  });
+
+  it('domain wildcard with specific path (no trailing *) matches exact path', () => {
+    expect(matchesResourcePattern('https://sub.example.com/api/v1', p(['https://*.example.com/api/v1'])))
+      .toEqual({ allowed: true });
+  });
+
+  it('domain wildcard with exact path rejects different path', () => {
+    expect(matchesResourcePattern('https://sub.example.com/other', p(['https://*.example.com/api/v1'])))
+      .toEqual({ allowed: false, reason: 'no matching pattern' });
+  });
+
+  it('rejects scheme mismatch (http vs https)', () => {
+    expect(matchesResourcePattern('http://sub.example.com/api', p(['https://*.example.com/*'])))
+      .toEqual({ allowed: false, reason: 'no matching pattern' });
+  });
+
+  it('applies security pre-checks (fragment)', () => {
+    expect(matchesResourcePattern('https://example.com/api#frag', p(['https://*.example.com/*'])))
+      .toEqual({ allowed: false, reason: 'must not contain a fragment' });
+  });
+
+  it('applies security pre-checks (userinfo)', () => {
+    expect(matchesResourcePattern('https://user@example.com/api', p(['https://*.example.com/*'])))
+      .toEqual({ allowed: false, reason: 'must not contain userinfo' });
+  });
+
+  it('applies security pre-checks (control chars)', () => {
+    expect(matchesResourcePattern('https://example.com/\x00api', p(['https://*.example.com/*'])))
+      .toEqual({ allowed: false, reason: 'contains control characters' });
+  });
+
+  it('rejects custom scheme', () => {
+    expect(matchesResourcePattern('cursor://example.com/api', p(['cursor://*.example.com/*'])))
+      .toEqual({ allowed: false, reason: 'must use http or https scheme' });
+  });
+});
+
+describe('matchedResourcePattern', () => {
+  it('returns the matched pattern string', () => {
+    expect(matchedResourcePattern('https://api.example.com/v1', p(['https://api.example.com/*'])))
+      .toBe('https://api.example.com/*');
+  });
+
+  it('returns empty string when resource is empty', () => {
+    expect(matchedResourcePattern('', p(['https://api.example.com/*']))).toBe('');
+  });
+
+  it('returns empty string when allowlist is empty', () => {
+    expect(matchedResourcePattern('https://api.example.com/v1', p([]))).toBe('');
+  });
+
+  it('returns empty string when no pattern matches', () => {
+    expect(matchedResourcePattern('https://other.com/v1', p(['https://api.example.com/*']))).toBe('');
+  });
+
+  it('returns the first matching pattern with domain wildcard', () => {
+    expect(matchedResourcePattern('https://sub.example.com/api', p(['https://*.example.com/*'])))
+      .toBe('https://*.example.com/*');
+  });
+});
+
+describe('checkResourceParam (structured return)', () => {
+  it('returns null when validation passes', () => {
+    expect(checkResourceParam('https://mcp.example.com', { requireResource: false, allowedResources: [] }))
+      .toBeNull();
+  });
+
+  it('returns resource_required reason when missing and required', () => {
+    const result = checkResourceParam('', { requireResource: true, allowedResources: [] });
+    expect(result).toEqual({
+      description: 'resource parameter is required (RFC 8707)',
+      reason: 'resource_required',
+    });
+  });
+
+  it('returns resource_invalid reason for bad URI', () => {
+    const result = checkResourceParam('cursor://foo/bar', { requireResource: false, allowedResources: [] });
+    expect(result).toEqual({
+      description: 'resource parameter must be a valid HTTPS URI without fragment',
+      reason: 'resource_invalid',
+    });
+  });
+
+  it('returns resource_not_allowed reason when not in allowlist', () => {
+    const result = checkResourceParam('https://other.com/api', {
+      requireResource: false,
+      allowedResources: p(['https://mcp.example.com/*']),
+    });
+    expect(result).toEqual({
+      description: 'resource not allowed',
+      reason: 'resource_not_allowed',
+    });
+  });
+
+  it('passes when resource matches allowlist with domain wildcard', () => {
+    expect(checkResourceParam('https://sub.example.com/api', {
+      requireResource: false,
+      allowedResources: p(['https://*.example.com/*']),
+    })).toBeNull();
   });
 });

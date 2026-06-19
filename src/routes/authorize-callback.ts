@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { Logger, requestMeta } from '../logger';
+import { ICounter } from '../metrics';
 import { verifyState } from '../state-signer';
 
 export interface CallbackConfig {
@@ -7,8 +8,10 @@ export interface CallbackConfig {
   getSecrets: () => Buffer[];
   getUpstreamIssuer: () => string;
   getUpstreamSupportsIss: () => boolean;
+  rejectedTotal: ICounter;
 }
 
+const ROUTE = '/authorize/callback';
 const ALLOWED_SUCCESS_PARAMS = new Set(['code', 'state', 'iss']);
 const ALLOWED_ERROR_PARAMS = new Set(['error', 'error_description', 'error_uri', 'state']);
 
@@ -35,6 +38,7 @@ export function createAuthorizeCallbackRouter(
 
     if (!stateBlob) {
       logger.warn('authorize callback: missing state parameter');
+      config.rejectedTotal.inc({ route: ROUTE, reason: 'state_missing' });
       res.status(400).json({
         error: 'invalid_request',
         error_description: 'Missing state parameter',
@@ -45,6 +49,7 @@ export function createAuthorizeCallbackRouter(
     const payload = verifyState(stateBlob, config.getSecrets());
     if (!payload) {
       logger.warn('authorize callback: state verification failed');
+      config.rejectedTotal.inc({ route: ROUTE, reason: 'state_verification_failed' });
       res.status(400).json({
         error: 'invalid_request',
         error_description: 'State verification failed',
@@ -54,6 +59,7 @@ export function createAuthorizeCallbackRouter(
 
     if (!code && !error) {
       logger.warn('authorize callback: malformed callback (neither code nor error)');
+      config.rejectedTotal.inc({ route: ROUTE, reason: 'malformed_callback' });
       res.status(400).json({
         error: 'invalid_request',
         error_description: 'Malformed callback: missing both code and error',
@@ -68,6 +74,7 @@ export function createAuthorizeCallbackRouter(
       logger.error('authorize callback: invalid redirectUri in verified state blob', {
         uri: payload.redirectUri.slice(0, 200),
       });
+      config.rejectedTotal.inc({ route: ROUTE, reason: 'redirect_uri_invalid' });
       res.status(400).json({
         error: 'invalid_request',
         error_description: 'State contains invalid redirect URI',
@@ -84,6 +91,7 @@ export function createAuthorizeCallbackRouter(
           logger.warn('authorize callback: upstream iss missing (upstream supports RFC 9207)', {
             expected: expectedIssuer,
           });
+          config.rejectedTotal.inc({ route: ROUTE, reason: 'iss_missing' });
           res.status(400).json({
             error: 'invalid_request',
             error_description: 'Missing iss parameter from upstream',
@@ -95,6 +103,7 @@ export function createAuthorizeCallbackRouter(
             received: upstreamIss,
             expected: expectedIssuer,
           });
+          config.rejectedTotal.inc({ route: ROUTE, reason: 'iss_mismatch' });
           res.status(400).json({
             error: 'invalid_request',
             error_description: 'Invalid iss parameter',
@@ -107,6 +116,7 @@ export function createAuthorizeCallbackRouter(
             received: upstreamIss,
             expected: expectedIssuer,
           });
+          config.rejectedTotal.inc({ route: ROUTE, reason: 'iss_mismatch' });
           res.status(400).json({
             error: 'invalid_request',
             error_description: 'Invalid iss parameter',

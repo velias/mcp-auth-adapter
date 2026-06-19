@@ -76,7 +76,7 @@ src/
   metrics.ts         # Prometheus metrics primitives (Counter, Gauge, Histogram, Registry, no-op stubs)
   fetch-utils.ts     # Shared fetch helpers (readResponseWithLimit — streaming read with byte cap)
   state-signer.ts    # HMAC-SHA256 state blob signing/verification with key rotation
-  uri-validation.ts  # Shared redirect URI security validation and pattern matching
+  uri-validation.ts  # Shared redirect URI security validation, pattern matching, resource pattern pre-parsing + matching (domain wildcards)
   middleware/
     security.ts      # requireJsonContentType (Content-Type guard for DCR)
     metrics.ts       # Per-router HTTP request counting and latency middleware
@@ -136,6 +136,11 @@ test/
   `src/routes/well-known.ts`) is called at startup and on periodic refresh to
   emit `Upstream IdP compatibility:` warnings when the upstream metadata is
   missing or incomplete for MCP.
+- **Pre-parsed resource patterns.** Resource allowlist patterns (`ParsedResourcePattern`)
+  are parsed once at config time via `parseResourcePatterns()`. Runtime matching
+  in `matchesResourcePattern()` / `matchedResourcePattern()` / `checkResourceParam()`
+  performs only field comparisons — no `new URL()` on patterns per request.
+  `ResourceConfig.allowedResources` is `ParsedResourcePattern[]`, not `string[]`.
 - **Metrics subsystem.** `src/metrics.ts` provides zero-dependency Prometheus
   primitives (Counter, Gauge, Histogram) behind `ICounter`/`IGauge`/`IHistogram`
   interfaces. `createMetricsRegistry(enabled)` returns a real `Registry` or a
@@ -166,7 +171,8 @@ CIMD (EXPERIMENTAL): `MCP_PROXY_CIMD_MAP`, `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID`,
 
 RFC 8707 Resource Parameter: `MCP_PROXY_AUTH_REQUIRE_RESOURCE` (boolean,
 default `false`), `MCP_PROXY_AUTH_ALLOWED_RESOURCES` (comma-separated URI
-patterns with trailing `*` prefix match).
+patterns — trailing `*` = path prefix match, `*.domain.com` = domain wildcard
+matching domain and all subdomains, e.g. `https://*.corp.example.com/*`).
 
 Observability: `MCP_METRICS_ENABLED`.
 
@@ -211,6 +217,29 @@ npm run lint:fix     # ESLint auto-fix
   alongside the router mount. To add domain-specific metrics: accept
   `IMetricsRegistry` in the module, create counters/gauges/histograms from it.
   No external metrics dependencies — the zero-dependency approach is deliberate.
+  - **Application metrics**:
+    - `mcp_auth_request_rejected_total{route, reason, grant_type?, resource?}` —
+      incremented at every validation rejection. `route` is `/authorize`,
+      `/authorize/callback`, `/token`, or `/register`. `reason` is a bounded
+      enum per route. `grant_type` only on `/token` (recognized values:
+      `authorization_code`, `refresh_token`, `client_credentials`, `jwt_bearer`;
+      omitted for unrecognized). `resource` only on `/authorize` and `/token`
+      when `allowedResources` is configured (uses matched pattern, not raw URI).
+    - `mcp_auth_authorize_redirects_total{resource?}` — successful `/authorize`
+      redirects. `resource` label as above.
+    - `mcp_auth_token_proxy_upstream_duration_seconds{grant_type?, resource?}` —
+      token upstream request duration with `grant_type` and `resource` labels.
+    - `mcp_auth_token_proxy_upstream_status_total{status, grant_type?, resource?}` —
+      token upstream status codes with `grant_type` and `resource` labels.
+  - **Rejection counter pattern**: Every validation rejection in a route
+    handler must call `rejectedTotal.inc(...)` with fixed `route` + `reason`
+    labels before sending the error response.
+  - **`grant_type` label pattern**: Only recognized grant types get a label
+    (via `grantTypeLabel()` in `token.ts`). Add new grant types to
+    `GRANT_TYPE_LABELS` — the only place to update.
+  - **`resource` label pattern**: Uses matched allowlist pattern, not raw URI.
+    Only emitted when `allowedResources` is configured. When empty, omit the
+    label entirely. Use `matchedResourcePattern()` from `uri-validation.ts`.
 - OAuth error responses follow RFC format (`{ error, error_description }`).
 - **Router config objects** — Router factory functions accept a single flat
   typed config interface + `logger`. The config interface `extends` shared
@@ -228,7 +257,10 @@ npm run lint:fix     # ESLint auto-fix
   inline. Route handlers should be thin orchestrators that call shared functions
   and map results to HTTP responses. Existing examples:
   - `src/uri-validation.ts` — `validateRedirectUriSecurity()`,
-    `validateResourceUri()`, `matchesRedirectPattern()`, `checkResourceParam()`
+    `validateResourceUri()`, `matchesRedirectPattern()`,
+    `parseResourcePatterns()` (config-time compiler),
+    `matchesResourcePattern()`, `matchedResourcePattern()`,
+    `checkResourceParam()`
   - `src/state-signer.ts` — `signState()`, `verifyState()`
   - `src/cimd.ts` — validation, resolution, caching used by both authorize and
     token routes
