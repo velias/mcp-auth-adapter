@@ -281,7 +281,7 @@ describe('Well-Known Discovery Endpoints', () => {
 
       const res = await request(app).get('/.well-known/openid-configuration');
 
-      expect(res.body.grant_types_supported).toEqual(['authorization_code']);
+      expect(res.body.grant_types_supported).toEqual(['authorization_code', 'client_credentials']);
     });
 
     it('injects code_challenge_methods_supported when upstream omits it', async () => {
@@ -306,6 +306,18 @@ describe('Well-Known Discovery Endpoints', () => {
       expect(res.body.response_types_supported).toEqual(['code', 'id_token']);
       expect(res.body.grant_types_supported).toEqual(['authorization_code', 'refresh_token']);
       expect(res.body.code_challenge_methods_supported).toEqual(['plain', 'S256']);
+    });
+
+    it('passes through client_credentials in grant_types_supported from upstream', async () => {
+      const upstreamWithCc = {
+        ...MINIMAL_UPSTREAM,
+        grant_types_supported: ['authorization_code', 'client_credentials', 'refresh_token'],
+      };
+      const app = makeApp(makeConfig(), upstreamWithCc);
+
+      const res = await request(app).get('/.well-known/openid-configuration');
+
+      expect(res.body.grant_types_supported).toEqual(['authorization_code', 'client_credentials', 'refresh_token']);
     });
 
     it('does not inject defaults when authorization_endpoint is missing', async () => {
@@ -354,6 +366,22 @@ describe('Well-Known Discovery Endpoints', () => {
       const defaults = buildDefaultUpstreamDoc('https://sso.example.com/auth/realms/test');
 
       expect(defaults.code_challenge_methods_supported).toEqual(['S256']);
+    });
+
+    it('includes client_credentials in grant_types_supported', () => {
+      const defaults = buildDefaultUpstreamDoc('https://sso.example.com/auth/realms/test');
+
+      expect(defaults.grant_types_supported).toContain('client_credentials');
+      expect(defaults.grant_types_supported).toContain('authorization_code');
+      expect(defaults.grant_types_supported).toContain('refresh_token');
+    });
+
+    it('includes client_secret_post in token_endpoint_auth_methods_supported', () => {
+      const defaults = buildDefaultUpstreamDoc('https://sso.example.com/auth/realms/test');
+
+      expect(defaults.token_endpoint_auth_methods_supported).toContain('client_secret_post');
+      expect(defaults.token_endpoint_auth_methods_supported).toContain('client_secret_basic');
+      expect(defaults.token_endpoint_auth_methods_supported).toContain('none');
     });
 
     it('produces a working well-known document when used as upstream', async () => {

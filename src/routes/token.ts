@@ -141,12 +141,25 @@ async function handleTokenRequest(
     }
 
     const upstreamUrl = getUpstreamTokenEndpoint();
+    // Forward Authorization header for non-CIMD requests (supports client_secret_basic
+    // per RFC 6749 §2.3.1). Skipped for CIMD because client_id is rewritten — the
+    // original credentials would be invalid for the upstream IdP's mapped client.
+    const outHeaders: Record<string, string> = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    };
+    if (!isCimd) {
+      const authHeader = req.get('authorization');
+      if (authHeader) {
+        outHeaders['Authorization'] = authHeader;
+      }
+    }
+
     let upstreamResponse: globalThis.Response;
     const fetchStart = process.hrtime.bigint();
     try {
       upstreamResponse = await fetch(upstreamUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: outHeaders,
         body: params.toString(),
         redirect: 'error',
         signal: AbortSignal.timeout(TOKEN_UPSTREAM_TIMEOUT_MS),

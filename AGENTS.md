@@ -35,8 +35,12 @@ issue tokens — all real auth/token work stays on the upstream IdP.
 - **Token proxy** — `POST /token` proxies token requests to the upstream IdP.
   For `authorization_code` grants, validates `redirect_uri` against allowed
   patterns and rewrites it to the adapter's callback URL. For `refresh_token`
-  grants, passes through without redirect_uri modification. Always active when
-  the authorize proxy is active.
+  grants, passes through without redirect_uri modification. For
+  `client_credentials` and `urn:ietf:params:oauth:grant-type:jwt-bearer` grants,
+  passes all parameters through without redirect_uri logic. Forwards the
+  `Authorization` header to upstream for non-CIMD requests (supports
+  `client_secret_basic` per RFC 6749 §2.3.1; skipped for CIMD because client_id
+  is rewritten). Always active when the authorize proxy is active.
 - **CIMD adapter** (EXPERIMENTAL) — Accepts CIMD-style `client_id` URLs from
   MCP clients, validates metadata documents, maps them to upstream IdP
   client_ids, and proxies `/authorize` and `/token` with client_id substitution.
@@ -85,7 +89,7 @@ test/
   register.test.ts            # DCR response, input validation, content-type guard, feature flag
   authorize.test.ts           # Redirect, scope filtering, state wrapping, redirect_uri validation, CIMD
   authorize-callback.test.ts  # Callback: state verification, iss validation, error forwarding
-  token.test.ts               # Token proxy: substitution, redirect_uri rewriting, passthrough
+  token.test.ts               # Token proxy: substitution, redirect_uri rewriting, passthrough, client_credentials, JWT bearer, Authorization header forwarding
   state-signer.test.ts        # State blob sign/verify, tamper, expiry, key rotation
   uri-validation.test.ts      # URI security checks, pattern matching
   cimd.test.ts                # CIMD URL/doc validation, cache, resolution, IP checks
@@ -122,10 +126,11 @@ test/
   and `token_endpoint` but omits `response_types_supported`,
   `grant_types_supported`, or `code_challenge_methods_supported`, the well-known
   builder injects safe MCP-required defaults (`["code"]`,
-  `["authorization_code"]`, `["S256"]`). Existing upstream values are never
-  overridden. `validateUpstreamDoc()` (also in `src/routes/well-known.ts`) is
-  called at startup and on periodic refresh to emit `Upstream IdP compatibility:`
-  warnings when the upstream metadata is missing or incomplete for MCP.
+  `["authorization_code", "client_credentials"]`, `["S256"]`). Existing upstream
+  values are never overridden. `validateUpstreamDoc()` (also in
+  `src/routes/well-known.ts`) is called at startup and on periodic refresh to
+  emit `Upstream IdP compatibility:` warnings when the upstream metadata is
+  missing or incomplete for MCP.
 - **Metrics subsystem.** `src/metrics.ts` provides zero-dependency Prometheus
   primitives (Counter, Gauge, Histogram) behind `ICounter`/`IGauge`/`IHistogram`
   interfaces. `createMetricsRegistry(enabled)` returns a real `Registry` or a
