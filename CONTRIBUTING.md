@@ -77,7 +77,7 @@ podman run -p 3000:3000 --env-file .env mcp-auth-adapter
 ### Running Tests
 
 ```bash
-npm test                # Jest + supertest (no network, no server)
+npm test                # Vitest + supertest (no network, no server)
 npm test -- --coverage  # Run with coverage report
 ```
 

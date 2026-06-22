@@ -257,7 +257,7 @@ describe('GET /authorize/callback', () => {
 
   describe('rejection counter', () => {
     it('increments rejectedTotal with state_missing reason', async () => {
-      const incSpy = jest.fn();
+      const incSpy = vi.fn();
       const app = express();
       app.use(createAuthorizeCallbackRouter({
         baseUrl: BASE_URL,

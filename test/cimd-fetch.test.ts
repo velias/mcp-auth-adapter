@@ -1,13 +1,13 @@
 import { fetchCimdDocument, validateHostNotPrivate } from '../src/cimd';
 import * as dns from 'dns';
 
-jest.mock('dns', () => ({
+vi.mock('dns', () => ({
   promises: {
-    lookup: jest.fn(),
+    lookup: vi.fn(),
   },
 }));
 
-const mockDnsLookup = dns.promises.lookup as jest.MockedFunction<typeof dns.promises.lookup>;
+const mockDnsLookup = dns.promises.lookup as ReturnType<typeof vi.fn>;
 
 const VALID_CIMD_URL = 'https://cursor.com/oauth-client.json';
 const VALID_CIMD_DOC = JSON.stringify({
@@ -55,7 +55,7 @@ function mockFetchResponse(options: {
     },
   };
 
-  (globalThis.fetch as jest.Mock) = jest.fn().mockResolvedValue(mockResponse);
+  globalThis.fetch = vi.fn().mockResolvedValue(mockResponse);
 }
 
 function mockDnsPublic() {
@@ -63,7 +63,7 @@ function mockDnsPublic() {
 }
 
 beforeEach(() => {
-  jest.restoreAllMocks();
+  vi.restoreAllMocks();
   mockDnsPublic();
 });
 
@@ -86,7 +86,7 @@ describe('fetchCimdDocument', () => {
   });
 
   it('rejects redirect responses (3xx)', async () => {
-    (globalThis.fetch as jest.Mock) = jest.fn().mockRejectedValue(
+    globalThis.fetch = vi.fn().mockRejectedValue(
       new TypeError('fetch failed: redirect mode is set to error'),
     );
     await expect(fetchCimdDocument(VALID_CIMD_URL)).rejects.toThrow();

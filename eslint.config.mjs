@@ -3,7 +3,7 @@ import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 
 export default defineConfig(
-  { ignores: ["dist/", "node_modules/", "jest.config.js"] },
+  { ignores: ["dist/", "node_modules/", "vitest.config.ts"] },
   eslint.configs.recommended,
   tseslint.configs.recommendedTypeChecked,
   {

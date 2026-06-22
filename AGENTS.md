@@ -59,7 +59,7 @@ issue tokens — all real auth/token work stays on the upstream IdP.
 | Runtime     | Node.js >= 18                                |
 | Language    | TypeScript 6.x (strict mode)                  |
 | HTTP        | Express 5.x                                   |
-| Tests       | Jest + ts-jest + supertest (in-memory, no I/O)|
+| Tests       | Vitest + supertest (in-memory, no I/O)        |
 | Lint        | ESLint 10 flat config + typescript-eslint      |
 | Build       | `tsc` → `dist/`                               |
 | Dev         | `ts-node src/index.ts`                        |
@@ -216,7 +216,7 @@ npm install          # Install dependencies
 npm run build        # Compile TypeScript to dist/
 npm run dev          # Run in dev mode (ts-node)
 npm start            # Run compiled output (node dist/index.js)
-npm test             # Run Jest tests
+npm test             # Run Vitest tests
 npm run lint         # ESLint check
 npm run lint:fix     # ESLint auto-fix
 ```

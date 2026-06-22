@@ -43,7 +43,7 @@ function mockUpstreamTokenResponse(options: {
   const allHeaders: Record<string, string> = { 'content-type': 'application/json', ...headers };
   const encoded = new TextEncoder().encode(JSON.stringify(body));
 
-  (globalThis.fetch as jest.Mock) = jest.fn().mockResolvedValue({
+  globalThis.fetch = vi.fn().mockResolvedValue({
     ok: status >= 200 && status < 300,
     status,
     headers: {
@@ -67,7 +67,7 @@ function mockUpstreamTokenResponse(options: {
 }
 
 beforeEach(() => {
-  jest.restoreAllMocks();
+  vi.restoreAllMocks();
 });
 
 describe('POST /token (Token Proxy)', () => {
@@ -89,7 +89,7 @@ describe('POST /token (Token Proxy)', () => {
     expect(res.status).toBe(200);
     expect(res.body.access_token).toBe('tok_123');
 
-    const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+    const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
     expect(fetchCall[0]).toBe(UPSTREAM_TOKEN_URL);
     const sentBody = new URLSearchParams(fetchCall[1].body as string);
     expect(sentBody.get('client_id')).toBe('cursor-sso-client');
@@ -111,7 +111,7 @@ describe('POST /token (Token Proxy)', () => {
       });
 
     expect(res.status).toBe(200);
-    const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+    const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
     const sentBody = new URLSearchParams(fetchCall[1].body as string);
     expect(sentBody.get('client_id')).toBe('regular-client-id');
   });
@@ -162,7 +162,7 @@ describe('POST /token (Token Proxy)', () => {
       });
 
     expect(res.status).toBe(200);
-    const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+    const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
     const sentBody = new URLSearchParams(fetchCall[1].body as string);
     expect(sentBody.get('client_id')).toBe('generic-client');
   });
@@ -222,7 +222,7 @@ describe('POST /token (Token Proxy)', () => {
   });
 
   it('handles upstream timeout gracefully', async () => {
-    (globalThis.fetch as jest.Mock) = jest.fn().mockRejectedValue(
+    globalThis.fetch = vi.fn().mockRejectedValue(
       new DOMException('The operation was aborted', 'AbortError'),
     );
     const app = createTestApp();
@@ -237,7 +237,7 @@ describe('POST /token (Token Proxy)', () => {
   });
 
   it('handles upstream redirect rejection', async () => {
-    (globalThis.fetch as jest.Mock) = jest.fn().mockRejectedValue(
+    globalThis.fetch = vi.fn().mockRejectedValue(
       new TypeError('fetch failed: redirect mode is set to error'),
     );
     const app = createTestApp();
@@ -354,7 +354,7 @@ describe('POST /token (Token Proxy)', () => {
     });
 
     it('does not call upstream when CIMD URL validation fails', async () => {
-      (globalThis.fetch as jest.Mock) = jest.fn();
+      globalThis.fetch = vi.fn();
       const app = createTestApp();
 
       await request(app)
@@ -410,7 +410,7 @@ describe('POST /token (Token Proxy)', () => {
         });
 
       expect(res.status).toBe(200);
-      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
       const body = new URLSearchParams(fetchCall[1].body);
       expect(body.get('redirect_uri')).toBe('http://localhost:3000/authorize/callback');
     });
@@ -481,7 +481,7 @@ describe('POST /token (Token Proxy)', () => {
         });
 
       expect(res.status).toBe(200);
-      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
       const body = new URLSearchParams(fetchCall[1].body);
       expect(body.get('redirect_uri')).toBe('http://localhost:3000/authorize/callback');
     });
@@ -504,7 +504,7 @@ describe('POST /token (Token Proxy)', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.access_token).toBe('cc_tok');
-      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
       const sentBody = new URLSearchParams(fetchCall[1].body as string);
       expect(sentBody.get('grant_type')).toBe('client_credentials');
       expect(sentBody.get('client_id')).toBe('my-service');
@@ -527,7 +527,7 @@ describe('POST /token (Token Proxy)', () => {
         });
 
       expect(res.status).toBe(200);
-      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
       expect(fetchCall[1].headers['Authorization']).toBe(basicAuth);
     });
 
@@ -547,7 +547,7 @@ describe('POST /token (Token Proxy)', () => {
         });
 
       expect(res.status).toBe(200);
-      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
       expect(fetchCall[1].headers['Authorization']).toBeUndefined();
     });
 
@@ -605,7 +605,7 @@ describe('POST /token (Token Proxy)', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.access_token).toBe('jwt_tok');
-      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
       const sentBody = new URLSearchParams(fetchCall[1].body as string);
       expect(sentBody.get('grant_type')).toBe('urn:ietf:params:oauth:grant-type:jwt-bearer');
       expect(sentBody.get('assertion')).toBe(jwtAssertion);
@@ -630,7 +630,7 @@ describe('POST /token (Token Proxy)', () => {
         });
 
       expect(res.status).toBe(200);
-      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
       expect(fetchCall[1].headers['Authorization']).toBe(basicAuth);
     });
 
@@ -650,7 +650,7 @@ describe('POST /token (Token Proxy)', () => {
         });
 
       expect(res.status).toBe(200);
-      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
       expect(fetchCall[1].headers['Authorization']).toBe(basicAuth);
     });
 
@@ -670,14 +670,14 @@ describe('POST /token (Token Proxy)', () => {
         });
 
       expect(res.status).toBe(200);
-      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
       expect(fetchCall[1].headers['Authorization']).toBeUndefined();
     });
   });
 
   describe('rejection counter', () => {
     it('increments rejectedTotal with content_type_invalid (no grant_type)', async () => {
-      const incSpy = jest.fn();
+      const incSpy = vi.fn();
       const app = express();
       app.disable('x-powered-by');
       app.use(createTokenRouter({
@@ -700,7 +700,7 @@ describe('POST /token (Token Proxy)', () => {
     });
 
     it('increments rejectedTotal with grant_type label for resource_required', async () => {
-      const incSpy = jest.fn();
+      const incSpy = vi.fn();
       const app = express();
       app.disable('x-powered-by');
       app.use(createTokenRouter({
@@ -786,7 +786,7 @@ describe('POST /token (Token Proxy)', () => {
         });
 
       expect(res.status).toBe(200);
-      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
       const body = new URLSearchParams(fetchCall[1].body);
       expect(body.get('resource')).toBe('https://mcp.example.com');
     });

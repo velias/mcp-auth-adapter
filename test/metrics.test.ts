@@ -379,7 +379,7 @@ describe('CIMD cache metrics', () => {
       metricsRegistry: registry,
     });
 
-    const fetcher = jest.fn<Promise<CimdDocument>, [string]>().mockResolvedValue(mockDoc);
+    const fetcher = vi.fn<(url: string) => Promise<CimdDocument>>().mockResolvedValue(mockDoc);
 
     await cache.get('https://example.com/oauth-client.json', fetcher);
     await cache.get('https://example.com/oauth-client.json', fetcher);
@@ -400,7 +400,7 @@ describe('CIMD cache metrics', () => {
       metricsRegistry: registry,
     });
 
-    const fetcher = jest.fn<Promise<CimdDocument>, [string]>().mockImplementation((url: string) =>
+    const fetcher = vi.fn<(url: string) => Promise<CimdDocument>>().mockImplementation((url: string) =>
       Promise.resolve({ client_id: url, redirect_uris: ['http://localhost/cb'] }),
     );
 

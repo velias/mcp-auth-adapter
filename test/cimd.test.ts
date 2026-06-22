@@ -347,7 +347,7 @@ describe('CimdCache', () => {
 
   it('returns cached doc within TTL', async () => {
     const cache = new CimdCache({ ttlMinutes: 30, pinnedUrls });
-    const fetcher = jest.fn().mockResolvedValue(mockDoc);
+    const fetcher = vi.fn().mockResolvedValue(mockDoc);
 
     const first = await cache.get('https://cursor.com/oauth.json', fetcher);
     const second = await cache.get('https://cursor.com/oauth.json', fetcher);
@@ -359,7 +359,7 @@ describe('CimdCache', () => {
 
   it('re-fetches after TTL expires', async () => {
     const cache = new CimdCache({ ttlMinutes: 0, pinnedUrls: new Set() });
-    const fetcher = jest.fn().mockResolvedValue(mockDoc);
+    const fetcher = vi.fn().mockResolvedValue(mockDoc);
 
     await cache.get('https://cursor.com/oauth.json', fetcher);
     await cache.get('https://cursor.com/oauth.json', fetcher);
@@ -369,7 +369,7 @@ describe('CimdCache', () => {
 
   it('does not cache errors', async () => {
     const cache = new CimdCache({ ttlMinutes: 30, pinnedUrls: new Set() });
-    const fetcher = jest.fn()
+    const fetcher = vi.fn()
       .mockRejectedValueOnce(new Error('fetch failed'))
       .mockResolvedValueOnce(mockDoc);
 
@@ -381,7 +381,7 @@ describe('CimdCache', () => {
 
   it('evicts oldest unpinned entry when max size reached', async () => {
     const cache = new CimdCache({ ttlMinutes: 30, pinnedUrls, maxUnpinnedSize: 2 });
-    const makeFetcher = (url: string) => jest.fn().mockResolvedValue({
+    const makeFetcher = (url: string) => vi.fn().mockResolvedValue({
       ...mockDoc,
       client_id: url,
     });
@@ -397,11 +397,11 @@ describe('CimdCache', () => {
 
   it('never evicts pinned entries', async () => {
     const cache = new CimdCache({ ttlMinutes: 30, pinnedUrls, maxUnpinnedSize: 1 });
-    const fetcher = jest.fn().mockResolvedValue(mockDoc);
+    const fetcher = vi.fn().mockResolvedValue(mockDoc);
 
     await cache.get('https://cursor.com/oauth.json', fetcher);
-    await cache.get('https://a.com/o.json', jest.fn().mockResolvedValue({ ...mockDoc, client_id: 'https://a.com/o.json' }));
-    await cache.get('https://b.com/o.json', jest.fn().mockResolvedValue({ ...mockDoc, client_id: 'https://b.com/o.json' }));
+    await cache.get('https://a.com/o.json', vi.fn().mockResolvedValue({ ...mockDoc, client_id: 'https://a.com/o.json' }));
+    await cache.get('https://b.com/o.json', vi.fn().mockResolvedValue({ ...mockDoc, client_id: 'https://b.com/o.json' }));
 
     // Pinned cursor stays, only 1 unpinned slot
     expect(cache.size).toBe(2);
@@ -413,7 +413,7 @@ describe('CimdCache', () => {
 
   it('clear() removes all entries', async () => {
     const cache = new CimdCache({ ttlMinutes: 30, pinnedUrls });
-    await cache.get('https://cursor.com/oauth.json', jest.fn().mockResolvedValue(mockDoc));
+    await cache.get('https://cursor.com/oauth.json', vi.fn().mockResolvedValue(mockDoc));
     expect(cache.size).toBe(1);
     cache.clear();
     expect(cache.size).toBe(0);
