@@ -68,7 +68,7 @@ To build the image locally from source, see [CONTRIBUTING.md](CONTRIBUTING.md#ru
 
 ## Build from Source
 
-**Prerequisites:** Node.js >= 18.x (uses native `fetch`), npm
+**Prerequisites:** Node.js >= 20.x (uses native `fetch`), npm
 
 ```bash
 npm install

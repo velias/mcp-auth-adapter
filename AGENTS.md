@@ -54,16 +54,16 @@ issue tokens — all real auth/token work stays on the upstream IdP.
 
 ## Tech stack
 
-| Area        | Choice                                       |
-|-------------|----------------------------------------------|
-| Runtime     | Node.js >= 18                                |
-| Language    | TypeScript 6.x (strict mode)                  |
-| HTTP        | Express 5.x                                   |
-| Tests       | Vitest + supertest (in-memory, no I/O)        |
-| Lint        | ESLint 10 flat config + typescript-eslint      |
-| Build       | `tsc` → `dist/`                               |
-| Dev         | `ts-node src/index.ts`                        |
-| CI          | GitHub Actions                                |
+| Area     | Choice                                        |
+|----------|-----------------------------------------------|
+| Runtime  | Node.js >= 20                                 |
+| Language | TypeScript 6.x (strict mode)                  |
+| HTTP     | Express 5.x                                   |
+| Tests    | Vitest + supertest (in-memory, no I/O)        |
+| Lint     | ESLint 10 flat config + typescript-eslint     |
+| Build    | `tsc` -> `dist/`                              |
+| Dev      | `ts-node src/index.ts`                        |
+| CI       | GitHub Actions                                |
 
 ## Directory layout
 
