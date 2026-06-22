@@ -47,7 +47,7 @@ GitHub Release notes are **auto-generated from merged PRs**. To keep them useful
 
 ## Development Setup
 
-**Prerequisites:** Node.js >= 18.x, npm (or [Docker](https://docs.docker.com/get-docker/) / [Podman](https://podman.io/docs/installation) for container-based development)
+**Prerequisites:** Node.js >= 20.x, npm (or [Docker](https://docs.docker.com/get-docker/) / [Podman](https://podman.io/docs/installation) for container-based development)
 
 ```bash
 git clone https://github.com/velias/mcp-auth-adapter.git
@@ -77,7 +77,7 @@ podman run -p 3000:3000 --env-file .env mcp-auth-adapter
 ### Running Tests
 
 ```bash
-npm test                # Jest + supertest (no network, no server)
+npm test                # Vitest + supertest (no network, no server)
 npm test -- --coverage  # Run with coverage report
 ```
 

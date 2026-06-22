@@ -383,7 +383,7 @@ describe('GET /authorize (CIMD integration)', () => {
     client_name: 'Cursor',
   };
 
-  const mockCimdFetcher = jest.fn().mockResolvedValue(mockCimdDoc);
+  const mockCimdFetcher = vi.fn().mockResolvedValue(mockCimdDoc);
 
   function makeAppWithCimd(configOverrides: Partial<AppConfig> = {}, fetcher = mockCimdFetcher) {
     return createApp({
@@ -539,7 +539,7 @@ describe('GET /authorize (CIMD integration)', () => {
   });
 
   it('returns error without leaking internal details on CIMD fetch failure', async () => {
-    const failingFetcher = jest.fn().mockRejectedValue(
+    const failingFetcher = vi.fn().mockRejectedValue(
       new Error('DNS resolution failed for blocked-host.invalid: SSRF blocked'),
     );
     const app = makeAppWithCimd(

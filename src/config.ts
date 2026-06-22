@@ -1,3 +1,4 @@
+import { validateCimdUrl } from './cimd';
 import { ParsedResourcePattern, parseResourcePatterns } from './uri-validation';
 
 export interface AppConfig {
@@ -169,10 +170,6 @@ function parseCimdMap(name: string): Record<string, string> {
 
   const obj = parsed as Record<string, unknown>;
   const result: Record<string, string> = {};
-
-  // Import validateCimdUrl lazily to keep the module dependency clean
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { validateCimdUrl } = require('./cimd') as { validateCimdUrl: (url: string) => { valid: boolean; reason?: string } };
 
   for (const [key, value] of Object.entries(obj)) {
     if (typeof value !== 'string') {

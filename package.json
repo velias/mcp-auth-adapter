@@ -13,14 +13,14 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "test": "jest",
+    "test": "vitest run",
     "lint": "eslint src/ test/",
     "lint:fix": "eslint src/ test/ --fix",
     "changelog": "bash scripts/generate-changelog.sh",
     "prepublishOnly": "npm run lint && npm test && npm run build"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "keywords": [
     "mcp",
@@ -59,15 +59,14 @@
     "@eslint/js": "^10.0.1",
     "@types/compression": "^1.8.1",
     "@types/express": "^5.0.6",
-    "@types/jest": "^30.0.0",
     "@types/node": "^25.8.0",
     "@types/supertest": "^7.2.0",
+    "@vitest/coverage-v8": "^3.2.3",
     "eslint": "^10.2.1",
-    "jest": "^30.4.2",
     "supertest": "^7.0.0",
-    "ts-jest": "^29.2.0",
     "ts-node": "^10.9.0",
     "typescript": "^6.0.3",
+    "vitest": "^3.2.3",
     "typescript-eslint": "^8.59.0"
   }
 }
