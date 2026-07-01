@@ -66,6 +66,20 @@ Each release `vX.Y.Z` produces the following image tags:
 
 To build the image locally from source, see [CONTRIBUTING.md](CONTRIBUTING.md#running-with-docker--podman).
 
+## npm Package
+
+The adapter is published on [npm](https://www.npmjs.com/package/mcp-auth-adapter) and can be run directly with `npx` — no cloning or building required.
+
+**Prerequisites:** Node.js >= 20.x, npx or npm
+
+```bash
+npx mcp-auth-adapter
+```
+
+Or install globally with `npm install -g mcp-auth-adapter` and run as `mcp-auth-adapter`.
+
+Or install it into your Node.js project with `npm install mcp-auth-adapter` to use it.
+
 ## Build from Source
 
 **Prerequisites:** Node.js >= 20.x (uses native `fetch`), npm
