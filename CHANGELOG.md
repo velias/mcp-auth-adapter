@@ -5,6 +5,39 @@ This file is auto-generated from [GitHub Releases](https://github.com/velias/mcp
 
 ---
 
+## [v2.2.0](https://github.com/velias/mcp-auth-adapter/releases/tag/v2.2.0) — 2026-07-02
+
+### Features
+* access logging added by @velias in https://github.com/velias/mcp-auth-adapter/pull/36
+### Other Changes
+* Tests migrated from jest to vitest by @velias in https://github.com/velias/mcp-auth-adapter/pull/32
+* Bump esbuild, @vitest/coverage-v8 and vitest by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/33
+* Bump the dev-dependencies group with 2 updates by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/35
+* Bump softprops/action-gh-release from 3.0.0 to 3.0.1 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/34
+
+
+**Full Changelog**: https://github.com/velias/mcp-auth-adapter/compare/v2.1.0...v2.2.0
+
+---
+
+## [v2.1.0](https://github.com/velias/mcp-auth-adapter/releases/tag/v2.1.0) — 2026-06-22
+
+### Features
+* Full 'OAuth Client Credentials' MCP Spec extension support by @velias in https://github.com/velias/mcp-auth-adapter/pull/27
+* Improved Resource Parameter Validation (RFC 8707) by @velias in https://github.com/velias/mcp-auth-adapter/pull/29
+* Prometheus metrics improvements by @velias in https://github.com/velias/mcp-auth-adapter/pull/30
+* Performance optimizations by @velias in https://github.com/velias/mcp-auth-adapter/pull/31
+### Other Changes
+* Bump the dev-dependencies group with 2 updates by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/24
+* Bump form-data from 4.0.5 to 4.0.6 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/25
+* updated @babel/core dev dependency by @velias in https://github.com/velias/mcp-auth-adapter/pull/26
+* Bump actions/checkout from 6.0.3 to 7.0.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/28
+
+
+**Full Changelog**: https://github.com/velias/mcp-auth-adapter/compare/v2.0.0...v2.1.0
+
+---
+
 ## [v2.0.0](https://github.com/velias/mcp-auth-adapter/releases/tag/v2.0.0) — 2026-06-12
 
 ### BREAKING CHANGES
