@@ -25,6 +25,7 @@ const CONFIG: AppConfig = {
   authScopesRemoved: ['offline_access'],
   wellKnownRefreshMinutes: 60,
   debug: false,
+  accessLog: false,
   cimdMap: {},
   cimdCacheMinutes: 30,
   cimdEnabled: false,

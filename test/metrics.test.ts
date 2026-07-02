@@ -182,6 +182,7 @@ const BASE_CONFIG: AppConfig = {
   proxyDcrEndpoint: true,
   wellKnownRefreshMinutes: 60,
   debug: false,
+  accessLog: false,
   cimdMap: {},
   cimdCacheMinutes: 30,
   cimdEnabled: false,

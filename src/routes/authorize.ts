@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { Logger, requestMeta } from '../logger';
+import { Logger } from '../logger';
 import {
   CimdDocument,
   isCimdClientId,
@@ -78,12 +78,13 @@ export function createAuthorizeRouter(
       ? { resource: matchedPattern }
       : {};
 
-    if (logger.isDebugEnabled) logger.debug('authorize request', {
-      ...requestMeta(req),
+    logger.accessLog('authorize request', req, res, {
       scope: params.get('scope'),
       clientId: params.get('client_id'),
       redirectUri: params.get('redirect_uri'),
       responseType: params.get('response_type'),
+      codeChallengeMethod: params.get('code_challenge_method') || 'MISSING',
+      statePresent: params.has('state'),
       resource: resource || 'MISSING',
     });
 

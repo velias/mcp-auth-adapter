@@ -65,7 +65,7 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
   isShuttingDown: () => boolean;
 } {
   let state = buildUpstreamState(upstreamDoc, config, fromFallback);
-  const logger = createLogger(config.debug);
+  const logger = createLogger(config.debug, config.accessLog);
 
   const metricsRegistry = createMetricsRegistry(config.metricsEnabled);
 

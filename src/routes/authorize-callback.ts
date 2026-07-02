@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { Logger, requestMeta } from '../logger';
+import { Logger } from '../logger';
 import { ICounter } from '../metrics';
 import { verifyState } from '../state-signer';
 
@@ -29,8 +29,7 @@ export function createAuthorizeCallbackRouter(
     const stateBlob = str(query.state);
     const upstreamIss = str(query.iss);
 
-    if (logger.isDebugEnabled) logger.debug('authorize callback request', {
-      ...requestMeta(req),
+    logger.accessLog('authorize callback request', req, res, {
       code_present: !!code,
       error: error,
       iss: upstreamIss,

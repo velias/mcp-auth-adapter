@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { AppConfig } from '../config';
-import { Logger, requestMeta } from '../logger';
+import { Logger } from '../logger';
 import { ICounter } from '../metrics';
 import { requireJsonContentType } from '../middleware/security';
 import { validateRedirectUriSecurity } from '../uri-validation';
@@ -65,9 +65,11 @@ export function createRegisterRouter(config: AppConfig, logger: Logger, rejected
   router.post('/register', requireJsonContentType, (req: Request, res: Response) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
-    if (logger.isDebugEnabled) logger.debug('DCR register request', {
-      ...requestMeta(req),
+    logger.accessLog('DCR register request', req, res, {
       clientName: typeof body.client_name === 'string' ? body.client_name : undefined,
+      softwareId: typeof body.software_id === 'string' ? body.software_id : undefined,
+      scope: typeof body.scope === 'string' ? body.scope : undefined,
+      grantTypes: Array.isArray(body.grant_types) ? (body.grant_types as unknown[]).join(',') : undefined,
       redirectUriCount: Array.isArray(body.redirect_uris) ? body.redirect_uris.length : 0,
     });
 
