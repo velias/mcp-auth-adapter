@@ -126,6 +126,7 @@ Environment variables are used. All variables are prefixed with `MCP_`. A `.env`
 | `MCP_PROXY_AUTH_REQUIRE_RESOURCE` | No | `false` | Reject `/authorize` and `/token` requests missing the RFC 8707 `resource` parameter. Enable for strict MCP spec compliance; leave disabled if MCP clients don't yet include it. |
 | `MCP_PROXY_AUTH_ALLOWED_RESOURCES` | No | -- | Comma-separated allowed resource URI patterns. Trailing `*` = prefix match, `*.domain.com` = domain wildcard (matches domain and all subdomains), no `*` = exact match. When set, `resource` must match a pattern; unmatched values are rejected with 400. |
 | | | | **Observability** |
+| `MCP_ACCESS_LOG` | No | `true` | Emit per-request access logs at `info` level with client identification (User-Agent, method, path, IP, plus route-specific fields). Set to `false` to disable. |
 | `MCP_METRICS_ENABLED` | No | `true` | Enable Prometheus metrics endpoint (`GET /metrics`) and request instrumentation. Set to `false` to disable (zero overhead). |
 | `MCP_DEBUG` | No | `false` | Emit structured debug logs for every request. |
 
@@ -480,10 +481,10 @@ ts=2025-06-01T12:00:00.000Z level=info msg="MCP Auth Adapter started" port=3000 
 
 | Level | Output | When |
 |---|---|---|
-| `info` | stdout | Startup, upstream refresh success, shutdown lifecycle |
+| `info` | stdout | Startup, upstream refresh success, shutdown lifecycle, **per-request access logs** (when `MCP_ACCESS_LOG=true`) |
 | `warn` | stderr | Upstream fetch failures (fallback kept), config conflicts, IdP compatibility issues |
 | `error` | stderr | Unhandled request errors, upstream request failures, fatal startup errors |
-| `debug` | stdout | Per-request details (method, path, IP, user-agent), discovery fetch attempts — **only when `MCP_DEBUG=true`** |
+| `debug` | stdout | Detailed per-request internals (rejection reasons, redirect targets, scope mutations), discovery fetch attempts — **only when `MCP_DEBUG=true`** |
 
 All levels except `debug` are always active. Set `MCP_DEBUG=true` to enable verbose per-request logging — useful for development and troubleshooting but noisy for production.
 
@@ -491,7 +492,28 @@ No log aggregation agent or format is assumed — the structured key=value lines
 
 ### Access logs
 
-Classic HTTP access logs are not emitted — use your reverse proxy or load balancer for per-request access logging. For debugging, `MCP_DEBUG=true` provides per-request structured logs; `/metrics` provides aggregate counts and latency histograms.
+Per-request access logs are emitted at `info` level when `MCP_ACCESS_LOG=true` (default). Each functional route logs one line per request after the response is sent, with client identification, route-specific fields, and the HTTP response status code:
+
+```
+ts=2026-07-02T14:05:00.000Z level=info msg="authorize request" method=GET path=/authorize ip=::ffff:127.0.0.1 userAgent="claude-code/2.1.128 (cli)" scope=openid clientId=mcp-client redirectUri=http://localhost:8080/callback responseType=code codeChallengeMethod=S256 statePresent=true resource=https://mcp.example.com/api status=302
+ts=2026-07-02T14:05:01.000Z level=info msg="token proxy request" method=POST path=/token ip=::ffff:127.0.0.1 userAgent="Cursor" clientId=mcp-client grantType=authorization_code hasAuthHeader=false resource=https://mcp.example.com/api status=200
+ts=2026-07-02T14:05:02.000Z level=info msg="DCR register request" method=POST path=/register ip=::ffff:127.0.0.1 userAgent="claude-code/2.1.128 (cli)" clientName=Claude softwareId=com.anthropic.claude scope="openid offline_access" grantTypes="authorization_code,refresh_token" redirectUriCount=1 status=201
+```
+
+**Fields per route:**
+
+| Route | Fields (beyond common) |
+|---|---|
+| All routes | `method`, `path`, `ip`, `userAgent`, `status` |
+| `/authorize` | `scope`, `clientId`, `redirectUri`, `responseType`, `codeChallengeMethod`, `statePresent`, `resource` |
+| `/authorize/callback` | `code_present`, `error`, `iss` |
+| `/token` | `clientId`, `grantType`, `redirectUri`, `hasAuthHeader`, `resource` |
+| `/register` | `clientName`, `softwareId`, `scope`, `grantTypes`, `redirectUriCount` |
+| `/.well-known/*` | _(common fields only)_ |
+
+The `userAgent` field is the primary mechanism for identifying which MCP client is making a request. Known User-Agent values include `claude-code/<version> (cli)`, `Cursor`, `mcp-sdk-ts/<version>`, and `codex-mcp-client/<version>`. The DCR endpoint additionally logs `clientName` and `softwareId` from the registration metadata (RFC 7591).
+
+Set `MCP_ACCESS_LOG=false` to disable access logging entirely (e.g. if you rely on reverse proxy access logs and want to reduce log volume).
 
 ## Metrics / Observability
 

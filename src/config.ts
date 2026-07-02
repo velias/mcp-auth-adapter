@@ -17,6 +17,7 @@ export interface AppConfig {
   cimdDefaultClientId?: string;
   cimdCacheMinutes: number;
   cimdEnabled: boolean;
+  accessLog: boolean;
   metricsEnabled: boolean;
   shutdownTimeoutSeconds: number;
   authStateSecret?: Buffer;
@@ -249,6 +250,7 @@ export function loadConfig(): AppConfig {
     cimdDefaultClientId,
     cimdCacheMinutes,
     cimdEnabled,
+    accessLog: parseBoolEnv('MCP_ACCESS_LOG', true),
     metricsEnabled: parseBoolEnv('MCP_METRICS_ENABLED', true),
     shutdownTimeoutSeconds: parseIntEnv('MCP_SHUTDOWN_TIMEOUT_SECONDS', 30),
     authStateSecret,

@@ -199,6 +199,29 @@ describe('loadConfig — boolean env vars', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Access log (MCP_ACCESS_LOG)
+// ---------------------------------------------------------------------------
+describe('loadConfig — access log', () => {
+  it('defaults to true when unset', () => {
+    withEnv({}, () => {
+      expect(loadConfig().accessLog).toBe(true);
+    });
+  });
+
+  it.each(['true', 'TRUE', 'True'])('MCP_ACCESS_LOG="%s" → accessLog=true', (val) => {
+    withEnv({ MCP_ACCESS_LOG: val }, () => {
+      expect(loadConfig().accessLog).toBe(true);
+    });
+  });
+
+  it.each(['false', 'FALSE', '0', 'anything'])('MCP_ACCESS_LOG="%s" → accessLog=false', (val) => {
+    withEnv({ MCP_ACCESS_LOG: val }, () => {
+      expect(loadConfig().accessLog).toBe(false);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Scopes env vars
 // ---------------------------------------------------------------------------
 describe('loadConfig — scopes env vars', () => {

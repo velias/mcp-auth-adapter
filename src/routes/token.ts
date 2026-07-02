@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import express from 'express';
-import { Logger, requestMeta } from '../logger';
+import { Logger } from '../logger';
 import { readResponseWithLimit } from '../fetch-utils';
 import { isCimdClientId, validateCimdUrl, resolveUpstreamClientId, sanitizeForError } from '../cimd';
 import { matchesRedirectPattern, checkAndMatchResource, ResourceConfig } from '../uri-validation';
@@ -77,11 +77,11 @@ async function handleTokenRequest(
     const redirectUri = str(rawBody.redirect_uri);
     const resource = str(rawBody.resource);
 
-    if (logger.isDebugEnabled) logger.debug('token proxy request', {
-      ...requestMeta(req),
+    logger.accessLog('token proxy request', req, res, {
       clientId: clientId.startsWith('https://') ? clientId.slice(0, 80) : clientId,
       grantType,
       redirectUri: redirectUri ? redirectUri.split('?')[0].slice(0, 200) : undefined,
+      hasAuthHeader: !!req.get('authorization'),
       resource: resource || 'MISSING',
     });
 

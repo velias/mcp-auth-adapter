@@ -1,11 +1,13 @@
-import { Request } from 'express';
+import { Request, Response } from 'express';
 
 export type Logger = {
   isDebugEnabled: boolean;
+  isAccessLogEnabled: boolean;
   info: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
   error: (message: string, meta?: Record<string, unknown>) => void;
   debug: (message: string, meta?: Record<string, unknown>) => void;
+  accessLog: (message: string, req: Request, res: Response, meta?: Record<string, unknown>) => void;
 };
 
 function formatValue(v: unknown): string {
@@ -27,15 +29,23 @@ function formatLine(level: string, message: string, meta?: Record<string, unknow
   return line;
 }
 
-export function createLogger(debugEnabled: boolean): Logger {
+export function createLogger(debugEnabled: boolean, accessLogEnabled: boolean = true): Logger {
   return {
     isDebugEnabled: debugEnabled,
+    isAccessLogEnabled: accessLogEnabled,
     info: (message, meta?) => console.log(formatLine('info', message, meta)),
     warn: (message, meta?) => console.warn(formatLine('warn', message, meta)),
     error: (message, meta?) => console.error(formatLine('error', message, meta)),
     debug: (message, meta?) => {
       if (!debugEnabled) return;
       console.log(formatLine('debug', message, meta));
+    },
+    accessLog: (message, req, res, meta?) => {
+      if (!accessLogEnabled) return;
+      const baseMeta = { ...requestMeta(req), ...meta };
+      res.on('finish', () => {
+        console.log(formatLine('info', message, { ...baseMeta, status: res.statusCode }));
+      });
     },
   };
 }

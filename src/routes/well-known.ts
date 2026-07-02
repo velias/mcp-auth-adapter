@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { AppConfig } from '../config';
-import { Logger, requestMeta } from '../logger';
+import { Logger } from '../logger';
 
 /**
  * Constructs a fallback upstream document from the issuer URL using
@@ -163,7 +163,7 @@ export function createWellKnownRouter(
   const cacheControl = `public, max-age=${Math.floor((refreshMinutes * 60) / 2)}`;
 
   const handler = (req: Request, res: Response) => {
-    if (logger.isDebugEnabled) logger.debug('well-known request', requestMeta(req));
+    logger.accessLog('well-known request', req, res);
     res.set('Content-Type', 'application/json');
     res.set('Cache-Control', cacheControl);
     res.send(getSerializedDocument());

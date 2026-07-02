@@ -154,11 +154,22 @@ test/
   routes), not globally. The `/metrics` endpoint serializes to Prometheus text
   exposition format on demand.
 - **Logging.** `src/logger.ts` provides a structured key=value logger writing
-  to stdout (info, debug) and stderr (warn, error). `createLogger(debugEnabled)`
-  returns a `Logger` with `info`, `warn`, `error`, `debug` methods and an
-  `isDebugEnabled` flag for call-site guards. Debug logs are gated by
-  `MCP_DEBUG`. Never use `console.*` directly — always use the `logger`
-  instance.
+  to stdout (info, debug) and stderr (warn, error). `createLogger(debugEnabled,
+  accessLogEnabled)` returns a `Logger` with `info`, `warn`, `error`, `debug`
+  methods and `isDebugEnabled` / `isAccessLogEnabled` flags for call-site
+  guards. Debug logs are gated by `MCP_DEBUG`. Never use `console.*`
+  directly — always use the `logger` instance.
+- **Access logging.** Each route handler calls `logger.accessLog(message, req,
+  res, meta)` which defers the actual log line until the response finishes
+  (`res.on('finish')`), so the log includes the HTTP `status` code. Common
+  fields (method, path, ip, userAgent) come from `requestMeta(req)`;
+  route-specific fields are passed via the `meta` argument. Key route fields:
+  `/authorize` logs `codeChallengeMethod` and `statePresent`;
+  `/token` logs `hasAuthHeader`; `/register` logs `clientName`, `softwareId`,
+  `scope`, and `grantTypes`. Access logs are controlled by `MCP_ACCESS_LOG`
+  (default `true`). To add access logging to a new route, call
+  `logger.accessLog(message, req, res, { ...routeFields })` — no manual
+  guard or `requestMeta` spread needed.
 
 ## Performance conventions
 
@@ -203,7 +214,7 @@ default `false`), `MCP_PROXY_AUTH_ALLOWED_RESOURCES` (comma-separated URI
 patterns — trailing `*` = path prefix match, `*.domain.com` = domain wildcard
 matching domain and all subdomains, e.g. `https://*.corp.example.com/*`).
 
-Observability: `MCP_METRICS_ENABLED`.
+Observability: `MCP_METRICS_ENABLED`, `MCP_ACCESS_LOG`.
 
 Lifecycle: `MCP_SHUTDOWN_TIMEOUT_SECONDS`.
 
