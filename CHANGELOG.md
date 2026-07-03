@@ -5,6 +5,23 @@ This file is auto-generated from [GitHub Releases](https://github.com/velias/mcp
 
 ---
 
+## [v2.2.1](https://github.com/velias/mcp-auth-adapter/releases/tag/v2.2.1) — 2026-07-03
+
+### Features
+* Logged values are always quoted for consistent parsing by @velias in https://github.com/velias/mcp-auth-adapter/pull/43
+### Other Changes
+* Bump docker/login-action from 4.2.0 to 4.3.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/40
+* Bump the dev-dependencies group with 3 updates by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/42
+* Bump MishaKav/jest-coverage-comment from 1.0.33 to 1.0.34 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/37
+* Bump github/codeql-action/upload-sarif from 4.36.2 to 4.36.3 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/39
+* Bump docker/build-push-action from 7.2.0 to 7.3.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/41
+* Bump docker/setup-buildx-action from 4.1.0 to 4.2.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/38
+
+
+**Full Changelog**: https://github.com/velias/mcp-auth-adapter/compare/v2.2.0...v2.2.1
+
+---
+
 ## [v2.2.0](https://github.com/velias/mcp-auth-adapter/releases/tag/v2.2.0) — 2026-07-02
 
 ### Features
