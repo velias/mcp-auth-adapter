@@ -473,10 +473,10 @@ On `SIGTERM` or `SIGINT` the adapter:
 
 ### Application logs
 
-The adapter emits structured logs to **stdout** (`info`, `debug`) and **stderr** (`warn`, `error`) in a machine-parseable key=value format:
+The adapter emits structured logs to **stdout** (`info`, `debug`) and **stderr** (`warn`, `error`) in a machine-parseable key=value format. All values are consistently double-quoted for uniform parsing (any `"` within a value is replaced with `'`):
 
 ```
-ts=2025-06-01T12:00:00.000Z level=info msg="MCP Auth Adapter started" port=3000 baseUrl=http://localhost:3000
+ts="2025-06-01T12:00:00.000Z" level="info" msg="MCP Auth Adapter started" port="3000" baseUrl="http://localhost:3000"
 ```
 
 | Level | Output | When |
@@ -488,16 +488,16 @@ ts=2025-06-01T12:00:00.000Z level=info msg="MCP Auth Adapter started" port=3000 
 
 All levels except `debug` are always active. Set `MCP_DEBUG=true` to enable verbose per-request logging — useful for development and troubleshooting but noisy for production.
 
-No log aggregation agent or format is assumed — the structured key=value lines are compatible with most log collectors (Fluentd, Promtail, Vector, CloudWatch, etc.) and can be parsed with simple regex or key=value splitters.
+No log aggregation agent or format is assumed — the structured key=value lines with consistent double-quoting are compatible with most log collectors (Fluentd, Promtail, Vector, CloudWatch, etc.) and can be parsed with standard key=value splitters (e.g. Splunk `kvextract`).
 
 ### Access logs
 
 Per-request access logs are emitted at `info` level when `MCP_ACCESS_LOG=true` (default). Each functional route logs one line per request after the response is sent, with client identification, route-specific fields, and the HTTP response status code:
 
 ```
-ts=2026-07-02T14:05:00.000Z level=info msg="authorize request" method=GET path=/authorize ip=::ffff:127.0.0.1 userAgent="claude-code/2.1.128 (cli)" scope=openid clientId=mcp-client redirectUri=http://localhost:8080/callback responseType=code codeChallengeMethod=S256 statePresent=true resource=https://mcp.example.com/api status=302
-ts=2026-07-02T14:05:01.000Z level=info msg="token proxy request" method=POST path=/token ip=::ffff:127.0.0.1 userAgent="Cursor" clientId=mcp-client grantType=authorization_code hasAuthHeader=false resource=https://mcp.example.com/api status=200
-ts=2026-07-02T14:05:02.000Z level=info msg="DCR register request" method=POST path=/register ip=::ffff:127.0.0.1 userAgent="claude-code/2.1.128 (cli)" clientName=Claude softwareId=com.anthropic.claude scope="openid offline_access" grantTypes="authorization_code,refresh_token" redirectUriCount=1 status=201
+ts="2026-07-02T14:05:00.000Z" level="info" msg="authorize request" method="GET" path="/authorize" ip="::ffff:127.0.0.1" userAgent="claude-code/2.1.128 (cli)" scope="openid" clientId="mcp-client" redirectUri="http://localhost:8080/callback" responseType="code" codeChallengeMethod="S256" statePresent="true" resource="https://mcp.example.com/api" status="302"
+ts="2026-07-02T14:05:01.000Z" level="info" msg="token proxy request" method="POST" path="/token" ip="::ffff:127.0.0.1" userAgent="Cursor" clientId="mcp-client" grantType="authorization_code" hasAuthHeader="false" resource="https://mcp.example.com/api" status="200"
+ts="2026-07-02T14:05:02.000Z" level="info" msg="DCR register request" method="POST" path="/register" ip="::ffff:127.0.0.1" userAgent="claude-code/2.1.128 (cli)" clientName="Claude" softwareId="com.anthropic.claude" scope="openid offline_access" grantTypes="authorization_code,refresh_token" redirectUriCount="1" status="201"
 ```
 
 **Fields per route:**

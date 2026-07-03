@@ -72,7 +72,7 @@ src/
   index.ts           # Entry point: loads env, fetches upstream doc, starts server
   app.ts             # Express app factory, middleware ordering, UpstreamState
   config.ts          # AppConfig type + loadConfig() from MCP_* env vars
-  logger.ts          # Structured line logger (ts= level= msg= ...)
+  logger.ts          # Structured line logger (key="value" format, all values double-quoted)
   metrics.ts         # Prometheus metrics primitives (Counter, Gauge, Histogram, Registry, no-op stubs)
   fetch-utils.ts     # Shared fetch helpers (readResponseWithLimit — streaming read with byte cap)
   state-signer.ts    # HMAC-SHA256 state blob signing/verification with key rotation
@@ -101,6 +101,7 @@ test/
   cimd-fetch.test.ts          # CIMD fetch with mocked HTTP: SSRF, size, timeout, content-type
   health.test.ts              # Liveness/readiness probes
   metrics.test.ts             # Metrics primitives, no-op stubs, /metrics endpoint, config parsing
+  logger.test.ts              # Log formatting: consistent quoting, double-quote replacement, levels, meta handling
   config.test.ts              # Config parsing, validation, auto-enable logic
 ```
 
@@ -154,11 +155,13 @@ test/
   routes), not globally. The `/metrics` endpoint serializes to Prometheus text
   exposition format on demand.
 - **Logging.** `src/logger.ts` provides a structured key=value logger writing
-  to stdout (info, debug) and stderr (warn, error). `createLogger(debugEnabled,
-  accessLogEnabled)` returns a `Logger` with `info`, `warn`, `error`, `debug`
-  methods and `isDebugEnabled` / `isAccessLogEnabled` flags for call-site
-  guards. Debug logs are gated by `MCP_DEBUG`. Never use `console.*`
-  directly — always use the `logger` instance.
+  to stdout (info, debug) and stderr (warn, error). All values are consistently
+  double-quoted (`key="value"`) for uniform parsing; any `"` within a value is
+  replaced with `'`. `createLogger(debugEnabled, accessLogEnabled)` returns a
+  `Logger` with `info`, `warn`, `error`, `debug` methods and
+  `isDebugEnabled` / `isAccessLogEnabled` flags for call-site guards. Debug
+  logs are gated by `MCP_DEBUG`. Never use `console.*` directly — always use
+  the `logger` instance.
 - **Access logging.** Each route handler calls `logger.accessLog(message, req,
   res, meta)` which defers the actual log line until the response finishes
   (`res.on('finish')`), so the log includes the HTTP `status` code. Common
