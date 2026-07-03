@@ -11,15 +11,11 @@ export type Logger = {
 };
 
 function formatValue(v: unknown): string {
-  const s = String(v);
-  if (s === '' || /[\s="\\]/.test(s)) {
-    return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-  }
-  return s;
+  return `"${String(v).replace(/"/g, "'")}"`;
 }
 
 function formatLine(level: string, message: string, meta?: Record<string, unknown>): string {
-  let line = `ts=${new Date().toISOString()} level=${level} msg=${formatValue(message)}`;
+  let line = `ts="${new Date().toISOString()}" level="${level}" msg=${formatValue(message)}`;
   if (meta) {
     for (const [k, v] of Object.entries(meta)) {
       if (v === undefined || v === null) continue;
