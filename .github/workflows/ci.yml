@@ -64,13 +64,13 @@ jobs:
       - run: npm test -- --coverage
       - name: Coverage comment
         id: coverage
-        uses: MishaKav/jest-coverage-comment@40d7aed38d0fbaea266c34c12ab06356eec894eb # v1.0.33
+        uses: MishaKav/jest-coverage-comment@25f2818fee93043532f640ad32a7565b4bd4ea9a # v1.0.34
         if: github.event_name == 'pull_request'
         with:
           coverage-summary-path: coverage/coverage-summary.json
       - name: Coverage badge
         if: github.ref == 'refs/heads/main'
-        uses: MishaKav/jest-coverage-comment@40d7aed38d0fbaea266c34c12ab06356eec894eb # v1.0.33
+        uses: MishaKav/jest-coverage-comment@25f2818fee93043532f640ad32a7565b4bd4ea9a # v1.0.34
         id: coverage-main
         with:
           coverage-summary-path: coverage/coverage-summary.json
