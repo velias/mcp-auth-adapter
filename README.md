@@ -575,9 +575,9 @@ ts="2025-06-01T12:00:00.000Z" level="info" msg="MCP Auth Adapter started" port="
 | Level | Output | When |
 |---|---|---|
 | `info` | stdout | Startup, upstream refresh success, shutdown lifecycle, **per-request access logs** (when `MCP_ACCESS_LOG=true`) |
-| `warn` | stderr | Upstream fetch failures (fallback kept), config conflicts, IdP compatibility issues |
-| `error` | stderr | Unhandled request errors, upstream request failures, fatal startup errors |
-| `debug` | stdout | Detailed per-request internals (rejection reasons, redirect targets, scope mutations), discovery fetch attempts — **only when `MCP_DEBUG=true`** |
+| `warn` | stderr | **Every client request rejection**, upstream fetch failures, config conflicts, IdP compatibility issues |
+| `error` | stderr | Unhandled request errors, upstream/external request failures, shutdown errors, fatal startup errors |
+| `debug` | stdout | Detailed per-request internals for troubleshooting — **only when `MCP_DEBUG=true`** |
 
 All levels except `debug` are always active. Set `MCP_DEBUG=true` to enable verbose per-request logging — useful for development and troubleshooting but noisy for production.
 
