@@ -2,6 +2,7 @@ import request from 'supertest';
 import express from 'express';
 import { createTokenRouter } from '../src/routes/token';
 import { createLogger } from '../src/logger';
+import { createMetricsRegistry } from '../src/metrics';
 import { parseResourcePatterns } from '../src/uri-validation';
 
 const UPSTREAM_TOKEN_URL = 'https://sso.example.com/auth/realms/test/protocol/openid-connect/token';
@@ -927,5 +928,181 @@ describe('POST /token (Token Proxy)', () => {
       expect(res.body.error).toBe('invalid_request');
       expect(res.body.error_description).toContain('resource');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-client redirect_uri enforcement
+// ---------------------------------------------------------------------------
+describe('POST /token (per-client redirect_uri enforcement)', () => {
+  const REDIRECT_CONFIG = {
+    redirectBaseUrl: 'http://localhost:3000',
+    redirectAllowedUris: ['http://localhost:*', 'http://127.0.0.1:*'],
+  };
+
+  const PER_CLIENT_MAP = new Map<string, string[]>([
+    ['cursor-sso-client', ['cursor://anysphere.cursor-mcp/*']],
+    ['claude-sso-client', ['http://localhost:*', 'http://127.0.0.1:*']],
+  ]);
+
+  function createAppWithPerClient(options: {
+    map?: Record<string, string>;
+    dcrClientIdRedirectMap?: Map<string, string[]>;
+  } = {}) {
+    const { map = CIMD_MAP, dcrClientIdRedirectMap = PER_CLIENT_MAP } = options;
+    const app = express();
+    app.disable('x-powered-by');
+    app.use(createTokenRouter({
+      getUpstreamTokenEndpoint: () => UPSTREAM_TOKEN_URL,
+      cimdMap: map,
+      requireResource: false,
+      allowedResources: [],
+      rejectedTotal: { inc() {} },
+      dcrClientIdRedirectMap,
+      ...REDIRECT_CONFIG,
+    }, createLogger(false)));
+    return app;
+  }
+
+  it('per-client: valid redirect_uri proceeds', async () => {
+    mockUpstreamTokenResponse();
+    const app = createAppWithPerClient();
+
+    const res = await request(app)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'authorization_code',
+        client_id: 'claude-sso-client',
+        code: 'code-123',
+        redirect_uri: 'http://localhost:8080/callback',
+      });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('per-client: invalid redirect_uri → 400', async () => {
+    const app = createAppWithPerClient();
+
+    const res = await request(app)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'authorization_code',
+        client_id: 'cursor-sso-client',
+        code: 'code-123',
+        redirect_uri: 'http://localhost:8080/callback',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_request');
+    expect(res.body.error_description).toContain('redirect_uri not allowed');
+  });
+
+  it('refresh_token grant: per-client redirect check does NOT apply', async () => {
+    mockUpstreamTokenResponse();
+    const app = createAppWithPerClient();
+
+    const res = await request(app)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'refresh_token',
+        client_id: 'cursor-sso-client',
+        refresh_token: 'rt-abc',
+      });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('client_credentials grant: per-client redirect check does NOT apply', async () => {
+    mockUpstreamTokenResponse();
+    const app = createAppWithPerClient();
+
+    const res = await request(app)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'client_credentials',
+        client_id: 'cursor-sso-client',
+        client_secret: 'secret',
+      });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('jwt_bearer grant: per-client redirect check does NOT apply', async () => {
+    mockUpstreamTokenResponse();
+    const app = createAppWithPerClient();
+
+    const res = await request(app)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        client_id: 'cursor-sso-client',
+        assertion: 'eyJ...',
+      });
+
+    expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// idp_client label on token upstream metrics
+// ---------------------------------------------------------------------------
+describe('POST /token (idp_client metrics label)', () => {
+  const KNOWN_CLIENTS = new Set(['cursor-sso-client']);
+
+  it('idp_client label on upstream metrics when client_id is known', async () => {
+    const registry = createMetricsRegistry(true);
+    mockUpstreamTokenResponse();
+
+    const app = express();
+    app.disable('x-powered-by');
+    app.use(createTokenRouter({
+      getUpstreamTokenEndpoint: () => UPSTREAM_TOKEN_URL,
+      cimdMap: {},
+      requireResource: false,
+      allowedResources: [],
+      rejectedTotal: { inc() {} },
+      metricsRegistry: registry,
+      knownIdpClients: KNOWN_CLIENTS,
+    }, createLogger(false)));
+
+    await request(app)
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'authorization_code', client_id: 'cursor-sso-client', code: 'c' });
+
+    const output = registry.serialize();
+    expect(output).toContain('idp_client="cursor-sso-client"');
+    expect(output).toContain('mcp_auth_token_proxy_upstream_status_total');
+    expect(output).toContain('mcp_auth_token_proxy_upstream_duration_seconds');
+  });
+
+  it('idp_client label absent for unknown client_id', async () => {
+    const registry = createMetricsRegistry(true);
+    mockUpstreamTokenResponse();
+
+    const app = express();
+    app.disable('x-powered-by');
+    app.use(createTokenRouter({
+      getUpstreamTokenEndpoint: () => UPSTREAM_TOKEN_URL,
+      cimdMap: {},
+      requireResource: false,
+      allowedResources: [],
+      rejectedTotal: { inc() {} },
+      metricsRegistry: registry,
+      knownIdpClients: KNOWN_CLIENTS,
+    }, createLogger(false)));
+
+    await request(app)
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'authorization_code', client_id: 'unknown-client', code: 'c' });
+
+    const output = registry.serialize();
+    expect(output).not.toContain('idp_client');
   });
 });

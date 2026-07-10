@@ -13,14 +13,20 @@ issue tokens — all real auth/token work stays on the upstream IdP.
   `/.well-known/oauth-authorization-server` as a filtered, MCP-oriented view of
   upstream OIDC metadata (with optional injection of this app's DCR,
   authorization, and token proxy URLs).
-- **Dynamic Client Registration (DCR)** — `POST /register` returns a fixed,
-  pre-configured `client_id` (RFC 7591 style, public client).
+- **Dynamic Client Registration (DCR)** — `POST /register` returns an upstream
+  `client_id` (RFC 7591 style, public client). Supports per-MCP-client IdP
+  client mapping via `MCP_PROXY_DCR_CLIENT_NAME_MAP` (pattern-based `client_name`
+  matching with optional per-client `allowed_redirect_uris` enforced at
+  `/authorize` and `/token` time, not at DCR time — the adapter is stateless).
+  Falls back to `MCP_PROXY_DCR_CLIENT_ID` for unmatched names.
   Validates `redirect_uris` format (parseable URI, no fragments per
   RFC 6749 §3.1.2; any scheme including custom/private-use per RFC 8252 §7.1)
   and type-checks `grant_types`/`response_types` (must be arrays of strings).
   Invalid input returns RFC 7591 `invalid_client_metadata` errors.
-  Debug logs include `client_name` and `redirect_uris` count for audit.
-  Auto-enables when `MCP_PROXY_DCR_CLIENT_ID` is set.
+  Access logs include `idpClient`, `matchedMapping`, `clientName` (truncated to
+  200 chars), and `redirect_uris` count for audit.
+  Auto-enables when `MCP_PROXY_DCR_CLIENT_ID` or `MCP_PROXY_DCR_CLIENT_NAME_MAP`
+  is set.
 - **Authorization adapter** — `GET /authorize` validates `redirect_uri` against
   configured patterns, wraps original `redirect_uri` + `state` into a signed
   HMAC state blob, rewrites `redirect_uri` to the adapter's callback, and
@@ -71,7 +77,7 @@ issue tokens — all real auth/token work stays on the upstream IdP.
 src/
   index.ts           # Entry point: loads env, fetches upstream doc, starts server
   app.ts             # Express app factory, middleware ordering, UpstreamState
-  config.ts          # AppConfig type + loadConfig() from MCP_* env vars
+  config.ts          # AppConfig type + loadConfig() from MCP_* env vars; exports ParsedClientNameEntry, parseClientNameMap(), matchClientName(), buildClientIdRedirectMap()
   logger.ts          # Structured line logger (key="value" format, all values double-quoted)
   metrics.ts         # Prometheus metrics primitives (Counter, Gauge, Histogram, Registry, no-op stubs)
   fetch-utils.ts     # Shared fetch helpers (readResponseWithLimit — streaming read with byte cap)
@@ -83,7 +89,7 @@ src/
   cimd.ts            # CIMD URL validation, document fetch/validation, cache, resolution (EXPERIMENTAL)
   routes/
     well-known.ts    # /.well-known/* — filtered upstream OIDC metadata
-    register.ts      # POST /register — fixed client_id DCR with input validation
+    register.ts      # POST /register — DCR with client_name mapping, input validation, RegisterRouterConfig
     authorize.ts     # GET /authorize — redirect adapter, scope filtering, state wrapping, CIMD
     authorize-callback.ts # GET /authorize/callback — iss interception, state verification
     token.ts         # POST /token — unified token proxy with redirect_uri rewriting
@@ -91,10 +97,10 @@ src/
     metrics.ts       # GET /metrics — Prometheus text exposition format endpoint
 test/
   well-known.test.ts          # Well-known doc content, whitelist, cache-control, refresh, CIMD fields
-  register.test.ts            # DCR response, input validation, content-type guard, feature flag
-  authorize.test.ts           # Redirect, scope filtering, state wrapping, redirect_uri validation, CIMD
+  register.test.ts            # DCR response, input validation, content-type guard, feature flag, client name mapping, access log fields
+  authorize.test.ts           # Redirect, scope filtering, state wrapping, redirect_uri validation, CIMD, per-client redirect_uri, idp_client metrics
   authorize-callback.test.ts  # Callback: state verification, iss validation, error forwarding
-  token.test.ts               # Token proxy: substitution, redirect_uri rewriting, passthrough, client_credentials, JWT bearer, Authorization header forwarding
+  token.test.ts               # Token proxy: substitution, redirect_uri rewriting, passthrough, client_credentials, JWT bearer, Authorization header forwarding, per-client redirect_uri, idp_client metrics
   state-signer.test.ts        # State blob sign/verify, tamper, expiry, key rotation
   uri-validation.test.ts      # URI security checks, pattern matching
   cimd.test.ts                # CIMD URL/doc validation, cache, resolution, IP checks
@@ -139,6 +145,16 @@ test/
   `src/routes/well-known.ts`) is called at startup and on periodic refresh to
   emit `Upstream IdP compatibility:` warnings when the upstream metadata is
   missing or incomplete for MCP.
+- **DCR client name mapping.** `dcrClientNameMap: ParsedClientNameEntry[]` (parsed
+  from `MCP_PROXY_DCR_CLIENT_NAME_MAP` at config time) drives client_id resolution
+  in the register route via `matchClientName()` (exact-first, then prefix in order).
+  `dcrClientIdRedirectMap: Map<string, string[]>` is built at config time via
+  `buildClientIdRedirectMap()` — maps upstream `client_id` to per-client redirect
+  URI patterns (merged when multiple name patterns map to the same client_id).
+  Used by `/authorize` and `/token` for per-client redirect_uri enforcement.
+  `knownIdpClients: Set<string>` (built in `app.ts` from all config sources:
+  DCR map entries, fallback client_id, CIMD map values, CIMD default) provides
+  bounded cardinality for the `idp_client` metrics label — O(1) `Set.has()` lookup.
 - **Pre-parsed resource patterns.** Resource allowlist patterns (`ParsedResourcePattern`)
   are parsed once at config time via `parseResourcePatterns()`. Runtime matching
   in `checkAndMatchResource()` parses the request URI once and returns both the
@@ -154,25 +170,18 @@ test/
   unconditional. HTTP metrics middleware is mounted per-router (only functional
   routes), not globally. The `/metrics` endpoint serializes to Prometheus text
   exposition format on demand.
-- **Logging.** `src/logger.ts` provides a structured key=value logger writing
-  to stdout (info, debug) and stderr (warn, error). All values are consistently
-  double-quoted (`key="value"`) for uniform parsing; any `"` within a value is
-  replaced with `'`. `createLogger(debugEnabled, accessLogEnabled)` returns a
-  `Logger` with `info`, `warn`, `error`, `debug` methods and
-  `isDebugEnabled` / `isAccessLogEnabled` flags for call-site guards. Debug
-  logs are gated by `MCP_DEBUG`. Never use `console.*` directly — always use
-  the `logger` instance.
-- **Access logging.** Each route handler calls `logger.accessLog(message, req,
-  res, meta)` which defers the actual log line until the response finishes
-  (`res.on('finish')`), so the log includes the HTTP `status` code. Common
-  fields (method, path, ip, userAgent) come from `requestMeta(req)`;
-  route-specific fields are passed via the `meta` argument. Key route fields:
-  `/authorize` logs `codeChallengeMethod` and `statePresent`;
-  `/token` logs `hasAuthHeader`; `/register` logs `clientName`, `softwareId`,
-  `scope`, and `grantTypes`. Access logs are controlled by `MCP_ACCESS_LOG`
-  (default `true`). To add access logging to a new route, call
-  `logger.accessLog(message, req, res, { ...routeFields })` — no manual
-  guard or `requestMeta` spread needed.
+- **Logging.** `src/logger.ts` — structured key=value format, all values
+  double-quoted, `"` in values replaced with `'`. Outputs: stdout (info, debug),
+  stderr (warn, error). `createLogger(debugEnabled, accessLogEnabled)` returns
+  a `Logger`; use `isDebugEnabled` / `isAccessLogEnabled` guards for non-trivial
+  arguments. Never use `console.*` directly. See "Code style" for level rules.
+- **Access logging.** `logger.accessLog(message, req, res, { ...routeFields })`
+  defers to `res.on('finish')` so the log includes `status`. Key route fields:
+  `/authorize`: `codeChallengeMethod`, `statePresent`;
+  `/token`: `hasAuthHeader`;
+  `/register`: `clientName` (truncated 200 chars), `idpClient`, `matchedMapping`,
+  `softwareId`, `scope`, `grantTypes`.
+  Controlled by `MCP_ACCESS_LOG` (default `true`).
 
 ## Performance conventions
 
@@ -182,7 +191,8 @@ test/
   time. Request handlers should use pre-computed structures, not rebuild them
   per call. The existing `parseResourcePatterns()` → `ParsedResourcePattern[]`
   pattern is the model: parse once at config load, match with field comparisons
-  at runtime.
+  at runtime. `matchClientName()` is only on the cold DCR path; hot paths
+  (`/authorize`, `/token`) use O(1) `Map.has()` and `Set.has()` lookups.
 - **One parse per input per request.** When a request value (e.g. a URI) needs
   both validation and a derived result (metrics label, pattern match), do both
   in a single pass. Avoid calling separate helpers that each re-parse the same
@@ -204,10 +214,18 @@ Key ones: `MCP_BASE_URL`, `MCP_UPSTREAM_SSO_URL`, `MCP_PROXY_DCR_CLIENT_ID`,
 `MCP_WELL_KNOWN_SCOPES_SUPPORTED`, `MCP_PROXY_AUTH_SCOPES_REMOVED`,
 `MCP_PROXY_AUTH_SCOPES_PRESERVED`.
 
+DCR client name mapping: `MCP_PROXY_DCR_CLIENT_NAME_MAP` (JSON object — keys are
+`client_name` patterns with trailing `*` for prefix match, values are string
+client_ids or objects with `client_id` + optional `allowed_redirect_uris`).
+Setting this alone enables DCR; unmatched names fall back to
+`MCP_PROXY_DCR_CLIENT_ID` or are rejected if no fallback.
+
 RFC 9207 iss interception: `MCP_PROXY_AUTH_STATE_SECRET` (required when
 authorize proxy is active), `MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS` (optional,
 for key rotation), `MCP_PROXY_AUTH_STATE_TTL_MINUTES` (default 30),
-`MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` (required when DCR is also active).
+`MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` (required when DCR is also active;
+not required when all `MCP_PROXY_DCR_CLIENT_NAME_MAP` entries have per-client
+`allowed_redirect_uris` and no fallback `MCP_PROXY_DCR_CLIENT_ID`).
 
 CIMD (EXPERIMENTAL): `MCP_PROXY_CIMD_MAP`, `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID`,
 `MCP_PROXY_CIMD_CACHE_MINUTES`.
@@ -243,6 +261,22 @@ npm run lint:fix     # ESLint auto-fix
 - Each test file corresponds to one route module.
 - Auto-enable behavior (404 when feature is not configured) is tested in the
   relevant file.
+- **Metrics integration tests**: two patterns exist. (1) Full-stack via
+  `/metrics` endpoint: create app with `metricsEnabled: true`, make a request
+  via supertest, `GET /metrics`, assert Prometheus text output
+  (`authorize.test.ts` style). (2) Direct registry: import
+  `createMetricsRegistry(true)`, pass the registry to a standalone router, call
+  `registry.serialize()` after the request (`token.test.ts` style). Prefer
+  pattern (1) for new tests (end-to-end coverage).
+- **Access log content tests**: create app with `accessLog: true`, spy on
+  `console.log` before the request, make the request via supertest (`await`
+  ensures `res.on('finish')` fires synchronously), assert spy was called with
+  a string containing expected `key="value"` pairs. Restore the spy in
+  `afterEach`. Used in `register.test.ts` for `idpClient`/`matchedMapping`.
+- **Bounded-cardinality label tests**: when adding a new Prometheus label that
+  must only use config-derived values, test both presence (known value from
+  `knownIdpClients`) and absence (unknown/arbitrary value omitted) to verify
+  cardinality is bounded.
 
 ## Code style
 
@@ -251,8 +285,13 @@ npm run lint:fix     # ESLint auto-fix
   `test/**`.
 - Structured logging — use `logger` from `src/logger.ts`, not `console.*`.
   Use `info` for lifecycle events and success paths, `warn` for recoverable
-  failures and config issues, `error` for unrecoverable or unexpected failures,
-  `debug` for per-request detail (gated by `MCP_DEBUG`).
+  failures, config issues, and **every request rejection** (invalid input,
+  unauthorized client, disallowed redirect_uri, etc. — anything that returns
+  a 4xx to the caller), `error` for unrecoverable or unexpected failures
+  (upstream errors, internal errors — typically 5xx), `debug` for per-request
+  detail on success paths (gated by `MCP_DEBUG`). Warn logs must include
+  enough context for an admin to troubleshoot (route, reason, truncated
+  client-provided values) without enabling debug mode.
 - Metrics — all application metric names use the `mcp_auth_` prefix; process
   metrics (`process_*`, `nodejs_*`) are un-prefixed per convention. New metrics
   must use bounded label cardinality (fixed route patterns, enum values — never
@@ -260,30 +299,18 @@ npm run lint:fix     # ESLint auto-fix
   alongside the router mount. To add domain-specific metrics: accept
   `IMetricsRegistry` in the module, create counters/gauges/histograms from it.
   No external metrics dependencies — the zero-dependency approach is deliberate.
-  - **Application metrics**:
-    - `mcp_auth_request_rejected_total{route, reason, grant_type?, resource?}` —
-      incremented at every validation rejection. `route` is `/authorize`,
-      `/authorize/callback`, `/token`, or `/register`. `reason` is a bounded
-      enum per route. `grant_type` only on `/token` (recognized values:
-      `authorization_code`, `refresh_token`, `client_credentials`, `jwt_bearer`;
-      omitted for unrecognized). `resource` only on `/authorize` and `/token`
-      when `allowedResources` is configured (uses matched pattern, not raw URI).
-    - `mcp_auth_authorize_redirects_total{resource?}` — successful `/authorize`
-      redirects. `resource` label as above.
-    - `mcp_auth_token_proxy_upstream_duration_seconds{grant_type?, resource?}` —
-      token upstream request duration with `grant_type` and `resource` labels.
-    - `mcp_auth_token_proxy_upstream_status_total{status, grant_type?, resource?}` —
-      token upstream status codes with `grant_type` and `resource` labels.
-  - **Rejection counter pattern**: Every validation rejection in a route
-    handler must call `rejectedTotal.inc(...)` with fixed `route` + `reason`
-    labels before sending the error response.
-  - **`grant_type` label pattern**: Only recognized grant types get a label
-    (via `grantTypeLabel()` in `token.ts`). Add new grant types to
-    `GRANT_TYPE_LABELS` — the only place to update.
-  - **`resource` label pattern**: Uses matched allowlist pattern, not raw URI.
-    Only emitted when `allowedResources` is configured. When empty, omit the
-    label entirely. Use `checkAndMatchResource()` from `uri-validation.ts`
-    (returns both validation result and matched pattern in one pass).
+  - **Label patterns** (apply to all metrics with these labels):
+    - **`grant_type`**: Only recognized values via `grantTypeLabel()` in
+      `token.ts`; add new grant types to `GRANT_TYPE_LABELS`.
+    - **`resource`**: Matched allowlist pattern (not raw URI); omit when
+      `allowedResources` is not configured. Use `checkAndMatchResource()`.
+    - **`idp_client`**: Bounded by config-time `knownIdpClients` set (built
+      in `app.ts`); `knownIdpClients.has(id) ? { idp_client: id } : {}`.
+  - **Rejection counter**: Every 4xx rejection must call
+    `rejectedTotal.inc({ route, reason, ...optional labels })` before the
+    error response. `reason` is a bounded enum per route.
+  - **DCR registrations counter** (`mcp_auth_dcr_registrations_total`):
+    `{idp_client, match_type}` — only active when client name map is configured.
 - OAuth error responses follow RFC format (`{ error, error_description }`).
 - **Router config objects** — Router factory functions accept a single flat
   typed config interface + `logger`. The config interface `extends` shared
@@ -308,7 +335,8 @@ npm run lint:fix     # ESLint auto-fix
   - `src/cimd.ts` — validation, resolution, caching used by both authorize and
     token routes
   - `src/config.ts` — shared interfaces (`AppConfig`, `ResourceConfig` via
-    re-export from uri-validation) consumed by all route modules
+    re-export from uri-validation), `ParsedClientNameEntry`,
+    `matchClientName()`, `buildClientIdRedirectMap()` consumed by route modules
 
   When adding a new cross-route concern, prefer a pure function returning a
   result/error value over duplicating HTTP response logic in each handler.

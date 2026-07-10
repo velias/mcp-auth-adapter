@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { createApp } from '../src/app';
-import { AppConfig } from '../src/config';
+import { AppConfig, ParsedClientNameEntry, buildClientIdRedirectMap } from '../src/config';
 import { filterScopes } from '../src/routes/authorize';
 import { parseResourcePatterns } from '../src/uri-validation';
 
@@ -36,6 +36,8 @@ const CONFIG: AppConfig = {
   allowedRedirectUris: ['http://localhost:*', 'http://127.0.0.1:*'],
   requireResource: false,
   allowedResources: [],
+  dcrClientNameMap: [],
+  dcrClientIdRedirectMap: new Map(),
 };
 
 function makeApp(configOverrides: Partial<AppConfig> = {}) {
@@ -818,5 +820,271 @@ describe('GET /authorize (resource parameter)', () => {
 
       expect(res.status).toBe(302);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-client redirect_uri enforcement
+// ---------------------------------------------------------------------------
+describe('GET /authorize (per-client redirect_uri enforcement)', () => {
+  const CURSOR_ENTRY: ParsedClientNameEntry = {
+    originalPattern: 'Cursor',
+    normalizedPattern: 'cursor',
+    isPrefix: false,
+    clientId: 'cursor-sso-client',
+    allowedRedirectUris: ['cursor://anysphere.cursor-mcp/*'],
+  };
+
+  const CLAUDE_ENTRY: ParsedClientNameEntry = {
+    originalPattern: 'Claude Code*',
+    normalizedPattern: 'claude code',
+    isPrefix: true,
+    clientId: 'claude-sso-client',
+    allowedRedirectUris: ['http://localhost:*', 'http://127.0.0.1:*'],
+  };
+
+  const NAME_MAP = [CURSOR_ENTRY, CLAUDE_ENTRY];
+  const CLIENT_REDIRECT_MAP = buildClientIdRedirectMap(NAME_MAP);
+
+  function makeAppWithPerClient(overrides: Partial<AppConfig> = {}) {
+    return createApp({
+      config: {
+        ...CONFIG,
+        dcrClientNameMap: NAME_MAP,
+        dcrClientIdRedirectMap: CLIENT_REDIRECT_MAP,
+        ...overrides,
+      },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    }).app;
+  }
+
+  it('client_id in reverse map, valid redirect_uri → redirect proceeds', async () => {
+    const app = makeAppWithPerClient();
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'claude-sso-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+      });
+
+    expect(res.status).toBe(302);
+  });
+
+  it('client_id in reverse map, invalid redirect_uri → 400', async () => {
+    const app = makeAppWithPerClient();
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'cursor-sso-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_request');
+    expect(res.body.error_description).toContain('redirect_uri not allowed');
+  });
+
+  it('unknown client_id falls through to global allowlist', async () => {
+    const app = makeAppWithPerClient();
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'unknown-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+      });
+
+    expect(res.status).toBe(302);
+  });
+
+  it('CIMD clients bypass per-client check', async () => {
+    const CIMD_URL = 'https://cursor.com/oauth-client.json';
+    const mockCimdDoc = {
+      client_id: CIMD_URL,
+      redirect_uris: ['http://127.0.0.1:8080/callback'],
+      client_name: 'Cursor',
+    };
+    const mockCimdFetcher = vi.fn().mockResolvedValue(mockCimdDoc);
+
+    const app = createApp({
+      config: {
+        ...CONFIG,
+        cimdMap: { [CIMD_URL]: 'cursor-sso-client' },
+        cimdEnabled: true,
+        dcrClientNameMap: NAME_MAP,
+        dcrClientIdRedirectMap: CLIENT_REDIRECT_MAP,
+      },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+      cimdFetcher: mockCimdFetcher,
+    }).app;
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: CIMD_URL,
+        redirect_uri: 'http://127.0.0.1:8080/callback',
+        response_type: 'code',
+      });
+
+    expect(res.status).toBe(302);
+  });
+
+  it('multiple name entries mapped to same client_id → merged patterns', async () => {
+    const entries: ParsedClientNameEntry[] = [
+      {
+        originalPattern: 'App A',
+        normalizedPattern: 'app a',
+        isPrefix: false,
+        clientId: 'shared-client',
+        allowedRedirectUris: ['http://localhost:*'],
+      },
+      {
+        originalPattern: 'App B',
+        normalizedPattern: 'app b',
+        isPrefix: false,
+        clientId: 'shared-client',
+        allowedRedirectUris: ['https://app-b.example.com/cb'],
+      },
+    ];
+    const mergedMap = buildClientIdRedirectMap(entries);
+
+    const app = createApp({
+      config: {
+        ...CONFIG,
+        dcrClientNameMap: entries,
+        dcrClientIdRedirectMap: mergedMap,
+      },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    }).app;
+
+    // First pattern (from App A)
+    const res1 = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'shared-client',
+        redirect_uri: 'http://localhost:3000/cb',
+        response_type: 'code',
+      });
+    expect(res1.status).toBe(302);
+
+    // Second pattern (from App B)
+    const res2 = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'shared-client',
+        redirect_uri: 'https://app-b.example.com/cb',
+        response_type: 'code',
+      });
+    expect(res2.status).toBe(302);
+  });
+
+  it('Security #6: client_id at /authorize determines patterns, not DCR registration', async () => {
+    const app = makeAppWithPerClient();
+
+    // A client registered as "Cursor" (getting cursor-sso-client) but tries /authorize
+    // with claude-sso-client — the redirect_uri patterns for claude-sso-client apply
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'claude-sso-client',
+        redirect_uri: 'cursor://anysphere.cursor-mcp/callback',
+        response_type: 'code',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error_description).toContain('redirect_uri not allowed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// idp_client label on authorize metrics
+// ---------------------------------------------------------------------------
+describe('GET /authorize (idp_client metrics label)', () => {
+  const NAME_MAP: ParsedClientNameEntry[] = [{
+    originalPattern: 'Cursor',
+    normalizedPattern: 'cursor',
+    isPrefix: false,
+    clientId: 'cursor-sso-client',
+  }];
+
+  it('idp_client label present on redirectsTotal when client_id is known', async () => {
+    const { app } = createApp({
+      config: {
+        ...CONFIG,
+        metricsEnabled: true,
+        dcrClientNameMap: NAME_MAP,
+        dcrClientIdRedirectMap: buildClientIdRedirectMap(NAME_MAP),
+      },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    });
+
+    await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'cursor-sso-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+      });
+
+    const metricsRes = await request(app).get('/metrics');
+    expect(metricsRes.text).toContain('mcp_auth_authorize_redirects_total{idp_client="cursor-sso-client"} 1');
+  });
+
+  it('idp_client label absent when client_id is unknown', async () => {
+    const { app } = createApp({
+      config: {
+        ...CONFIG,
+        metricsEnabled: true,
+        dcrClientNameMap: NAME_MAP,
+        dcrClientIdRedirectMap: buildClientIdRedirectMap(NAME_MAP),
+      },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    });
+
+    await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'unknown-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+      });
+
+    const metricsRes = await request(app).get('/metrics');
+    const redirectLines = metricsRes.text.split('\n').filter((l: string) => l.startsWith('mcp_auth_authorize_redirects_total'));
+    expect(redirectLines.length).toBeGreaterThan(0);
+    expect(redirectLines.every((l: string) => !l.includes('idp_client'))).toBe(true);
+  });
+
+  it('idp_client label on rejectedTotal when client_id is known but redirect_uri fails', async () => {
+    const entriesWithPatterns: ParsedClientNameEntry[] = [{
+      originalPattern: 'Cursor',
+      normalizedPattern: 'cursor',
+      isPrefix: false,
+      clientId: 'cursor-sso-client',
+      allowedRedirectUris: ['cursor://anysphere.cursor-mcp/*'],
+    }];
+    const { app } = createApp({
+      config: {
+        ...CONFIG,
+        metricsEnabled: true,
+        dcrClientNameMap: entriesWithPatterns,
+        dcrClientIdRedirectMap: buildClientIdRedirectMap(entriesWithPatterns),
+      },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    });
+
+    await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'cursor-sso-client',
+        redirect_uri: 'http://localhost:8080/callback',
+        response_type: 'code',
+      });
+
+    const metricsRes = await request(app).get('/metrics');
+    expect(metricsRes.text).toContain('idp_client="cursor-sso-client"');
+    expect(metricsRes.text).toContain('reason="redirect_uri_rejected"');
   });
 });

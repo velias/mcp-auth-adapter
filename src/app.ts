@@ -97,6 +97,13 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
   }
   app.use(express.json({ limit: '16kb' }));
 
+  // Build the set of known upstream client_ids from all config sources (bounded cardinality for metrics)
+  const knownIdpClients = new Set<string>();
+  for (const entry of config.dcrClientNameMap) knownIdpClients.add(entry.clientId);
+  if (config.clientId) knownIdpClients.add(config.clientId);
+  for (const v of Object.values(config.cimdMap)) knownIdpClients.add(v);
+  if (config.cimdDefaultClientId) knownIdpClients.add(config.cimdDefaultClientId);
+
   let httpMetrics: HttpMetrics | undefined;
   if (config.metricsEnabled) {
     httpMetrics = {
@@ -112,7 +119,13 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
   else app.use(wellKnownRouter);
 
   if (config.proxyDcrEndpoint) {
-    const registerRouter = createRegisterRouter(config, logger, rejectedTotal);
+    const registerRouter = createRegisterRouter({
+      defaultClientId: config.clientId || undefined,
+      dcrClientNameMap: config.dcrClientNameMap,
+      rejectedTotal,
+      metricsRegistry: config.metricsEnabled && config.dcrClientNameMap.length > 0 ? metricsRegistry : undefined,
+      knownIdpClients,
+    }, logger);
     if (metricsMiddleware) app.use(metricsMiddleware, registerRouter);
     else app.use(registerRouter);
   }
@@ -153,6 +166,8 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
       stateSecret: config.authStateSecret,
       stateTtlSeconds: config.authStateTtlSeconds,
       stateAllowedRedirectUris: config.authStateSecret ? config.allowedRedirectUris : undefined,
+      dcrClientIdRedirectMap: config.dcrClientIdRedirectMap.size > 0 ? config.dcrClientIdRedirectMap : undefined,
+      knownIdpClients: knownIdpClients.size > 0 ? knownIdpClients : undefined,
       rejectedTotal,
       redirectsTotal: authorizeRedirectsTotal,
     }, logger);
@@ -183,6 +198,8 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
       metricsRegistry,
       redirectBaseUrl: config.authStateSecret ? config.baseUrl : undefined,
       redirectAllowedUris: config.authStateSecret ? config.allowedRedirectUris : undefined,
+      dcrClientIdRedirectMap: config.dcrClientIdRedirectMap.size > 0 ? config.dcrClientIdRedirectMap : undefined,
+      knownIdpClients: knownIdpClients.size > 0 ? knownIdpClients : undefined,
       requireResource: config.requireResource,
       allowedResources: config.allowedResources,
       rejectedTotal,

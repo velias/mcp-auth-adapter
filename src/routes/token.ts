@@ -29,6 +29,8 @@ export interface TokenRouterConfig extends ResourceConfig {
   metricsRegistry?: IMetricsRegistry;
   redirectBaseUrl?: string;
   redirectAllowedUris?: string[];
+  dcrClientIdRedirectMap?: Map<string, string[]>;
+  knownIdpClients?: Set<string>;
   rejectedTotal: ICounter;
 }
 
@@ -46,6 +48,7 @@ export function createTokenRouter(
   router.post('/token', (req: Request, res: Response, next) => {
     const contentType = req.get('content-type') ?? '';
     if (!contentType.includes('application/x-www-form-urlencoded')) {
+      logger.warn('token proxy: invalid Content-Type', { contentType: contentType.slice(0, 100) });
       config.rejectedTotal.inc({ route: ROUTE, reason: 'content_type_invalid' });
       res.status(415).json({
         error: 'invalid_request',
@@ -93,6 +96,7 @@ async function handleTokenRequest(
       const { error: resourceError, matchedPattern } = checkAndMatchResource(resource, config);
       resourceLabel = matchedPattern ? { resource: matchedPattern } : {};
       if (resourceError) {
+        logger.warn('token proxy: resource parameter rejected', { reason: resourceError.reason, resource: resource.slice(0, 200), grantType, clientId: clientId.startsWith('https://') ? clientId.slice(0, 80) : clientId });
         config.rejectedTotal.inc({
           route: ROUTE,
           reason: resourceError.reason,
@@ -119,6 +123,7 @@ async function handleTokenRequest(
     if (isCimd) {
       const urlValidation = validateCimdUrl(clientId);
       if (!urlValidation.valid) {
+        logger.warn('token proxy: invalid CIMD client_id URL', { clientId: clientId.slice(0, 80), reason: urlValidation.reason });
         config.rejectedTotal.inc({
           route: ROUTE,
           reason: 'cimd_url_invalid',
@@ -139,7 +144,7 @@ async function handleTokenRequest(
       );
 
       if (!upstreamClientId) {
-        if (logger.isDebugEnabled) logger.debug('token proxy: unknown CIMD client rejected', { clientId: clientId.slice(0, 80) });
+        logger.warn('token proxy: unknown CIMD client rejected', { clientId: clientId.slice(0, 80) });
         config.rejectedTotal.inc({
           route: ROUTE,
           reason: 'cimd_client_unknown',
@@ -156,14 +161,21 @@ async function handleTokenRequest(
       params.set('client_id', upstreamClientId);
     }
 
+    // Resolve idp_client label for metrics (uses client_id after CIMD rewrite)
+    const effectiveClientId = params.get('client_id') ?? '';
+    const idpClientLabel: Record<string, string> = config.knownIdpClients?.has(effectiveClientId)
+      ? { idp_client: effectiveClientId } : {};
+
     // Redirect URI validation and rewriting for authorization_code grants
     if (config.redirectBaseUrl && grantType === 'authorization_code') {
       if (!redirectUri) {
+        logger.warn('token proxy: redirect_uri missing', { grantType, clientId: effectiveClientId });
         config.rejectedTotal.inc({
           route: ROUTE,
           reason: 'redirect_uri_missing',
           ...(gtLabel ? { grant_type: gtLabel } : {}),
           ...resourceLabel,
+          ...idpClientLabel,
         });
         res.status(400).json({
           error: 'invalid_request',
@@ -173,23 +185,46 @@ async function handleTokenRequest(
       }
 
       if (!isCimd) {
-        const match = matchesRedirectPattern(redirectUri, config.redirectAllowedUris!);
-        if (!match.allowed) {
-          if (logger.isDebugEnabled) logger.debug('token proxy: redirect_uri rejected', {
-            reason: match.reason,
+        // Per-client redirect_uri enforcement via dcrClientIdRedirectMap
+        const perClientPatterns = config.dcrClientIdRedirectMap?.get(effectiveClientId);
+        if (perClientPatterns) {
+          const match = matchesRedirectPattern(redirectUri, perClientPatterns);
+          if (!match.allowed) {
+            logger.warn('token proxy: redirect_uri rejected (per-client)', { reason: match.reason, uri: redirectUri.slice(0, 200), clientId: effectiveClientId });
+            config.rejectedTotal.inc({
+              route: ROUTE,
+              reason: 'redirect_uri_rejected',
+              ...(gtLabel ? { grant_type: gtLabel } : {}),
+              ...resourceLabel,
+              ...idpClientLabel,
+            });
+            res.status(400).json({
+              error: 'invalid_request',
+              error_description: 'redirect_uri not allowed',
+            });
+            return;
+          }
+          if (logger.isDebugEnabled) logger.debug('token proxy: redirect_uri allowed (per-client)', {
+            clientId: effectiveClientId,
             uri: redirectUri.slice(0, 200),
           });
-          config.rejectedTotal.inc({
-            route: ROUTE,
-            reason: 'redirect_uri_rejected',
-            ...(gtLabel ? { grant_type: gtLabel } : {}),
-            ...resourceLabel,
-          });
-          res.status(400).json({
-            error: 'invalid_request',
-            error_description: 'redirect_uri not allowed',
-          });
-          return;
+        } else {
+          const match = matchesRedirectPattern(redirectUri, config.redirectAllowedUris!);
+          if (!match.allowed) {
+            logger.warn('token proxy: redirect_uri rejected', { reason: match.reason, uri: redirectUri.slice(0, 200), clientId: effectiveClientId });
+            config.rejectedTotal.inc({
+              route: ROUTE,
+              reason: 'redirect_uri_rejected',
+              ...(gtLabel ? { grant_type: gtLabel } : {}),
+              ...resourceLabel,
+              ...idpClientLabel,
+            });
+            res.status(400).json({
+              error: 'invalid_request',
+              error_description: 'redirect_uri not allowed',
+            });
+            return;
+          }
         }
       }
 
@@ -221,12 +256,12 @@ async function handleTokenRequest(
         signal: AbortSignal.timeout(TOKEN_UPSTREAM_TIMEOUT_MS),
       });
       const fetchDuration = Number(process.hrtime.bigint() - fetchStart) / 1e9;
-      const upstreamLabels = { ...(gtLabel ? { grant_type: gtLabel } : {}), ...resourceLabel };
+      const upstreamLabels = { ...(gtLabel ? { grant_type: gtLabel } : {}), ...resourceLabel, ...idpClientLabel };
       upstreamDuration?.observe(fetchDuration, upstreamLabels);
       upstreamStatusCounter?.inc({ status: String(upstreamResponse.status), ...upstreamLabels });
     } catch (err) {
       const fetchDuration = Number(process.hrtime.bigint() - fetchStart) / 1e9;
-      const upstreamLabels = { ...(gtLabel ? { grant_type: gtLabel } : {}), ...resourceLabel };
+      const upstreamLabels = { ...(gtLabel ? { grant_type: gtLabel } : {}), ...resourceLabel, ...idpClientLabel };
       upstreamDuration?.observe(fetchDuration, upstreamLabels);
       logger.error('token proxy: upstream request failed', { error: String(err) });
       res.status(502).json({

@@ -1,4 +1,4 @@
-import { loadConfig } from '../src/config';
+import { loadConfig, parseClientNameMap, matchClientName, buildClientIdRedirectMap, ParsedClientNameEntry } from '../src/config';
 
 const REQUIRED_ENV = {
   MCP_BASE_URL: 'http://localhost:3000',
@@ -718,5 +718,254 @@ describe('loadConfig — resource parameter config', () => {
     withEnv({ MCP_PROXY_AUTH_ALLOWED_RESOURCES: 'https://*./*' }, () => {
       expect(() => loadConfig()).toThrow(/bare \* is not allowed/);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DCR client name map
+// ---------------------------------------------------------------------------
+describe('loadConfig — DCR client name map', () => {
+  it('simple format parsing (string values)', () => {
+    const map = { 'Cursor': 'cursor-client', 'Claude Code*': 'claude-client' };
+    withEnv({ MCP_PROXY_DCR_CLIENT_NAME_MAP: JSON.stringify(map) }, () => {
+      const cfg = loadConfig();
+      expect(cfg.dcrClientNameMap).toHaveLength(2);
+      expect(cfg.dcrClientNameMap[0].clientId).toBe('cursor-client');
+      expect(cfg.dcrClientNameMap[0].isPrefix).toBe(false);
+      expect(cfg.dcrClientNameMap[1].clientId).toBe('claude-client');
+      expect(cfg.dcrClientNameMap[1].isPrefix).toBe(true);
+      expect(cfg.proxyDcrEndpoint).toBe(true);
+    });
+  });
+
+  it('extended format parsing (object values with allowed_redirect_uris)', () => {
+    const map = {
+      'Cursor': { client_id: 'cursor-client', allowed_redirect_uris: 'cursor://anysphere.cursor-mcp/*' },
+    };
+    withEnv({ MCP_PROXY_DCR_CLIENT_NAME_MAP: JSON.stringify(map) }, () => {
+      const cfg = loadConfig();
+      expect(cfg.dcrClientNameMap[0].allowedRedirectUris).toEqual(['cursor://anysphere.cursor-mcp/*']);
+      expect(cfg.dcrClientIdRedirectMap.get('cursor-client')).toEqual(['cursor://anysphere.cursor-mcp/*']);
+    });
+  });
+
+  it('mixed format (some simple, some extended)', () => {
+    const map = {
+      'Cursor': { client_id: 'cursor-client', allowed_redirect_uris: 'cursor://anysphere.cursor-mcp/*' },
+      'VS Code*': 'vscode-client',
+    };
+    withEnv({ MCP_PROXY_DCR_CLIENT_NAME_MAP: JSON.stringify(map) }, () => {
+      const cfg = loadConfig();
+      expect(cfg.dcrClientNameMap).toHaveLength(2);
+      expect(cfg.dcrClientNameMap[0].allowedRedirectUris).toBeDefined();
+      expect(cfg.dcrClientNameMap[1].allowedRedirectUris).toBeUndefined();
+    });
+  });
+
+  it('invalid JSON rejection', () => {
+    withEnv({ MCP_PROXY_DCR_CLIENT_NAME_MAP: 'not-json' }, () => {
+      expect(() => loadConfig()).toThrow(/not valid JSON/);
+    });
+  });
+
+  it('empty client_id rejection', () => {
+    withEnv({ MCP_PROXY_DCR_CLIENT_NAME_MAP: '{"Cursor":"  "}' }, () => {
+      expect(() => loadConfig()).toThrow(/empty upstream client_id/);
+    });
+  });
+
+  it('non-string/non-object values rejected', () => {
+    withEnv({ MCP_PROXY_DCR_CLIENT_NAME_MAP: '{"Cursor":123}' }, () => {
+      expect(() => loadConfig()).toThrow(/must be a string.*or an object/);
+    });
+  });
+
+  it('invalid redirect_uri pattern rejection (missing scheme)', () => {
+    const map = { 'Cursor': { client_id: 'cursor-client', allowed_redirect_uris: 'localhost:8080' } };
+    withEnv({ MCP_PROXY_DCR_CLIENT_NAME_MAP: JSON.stringify(map) }, () => {
+      expect(() => loadConfig()).toThrow(/invalid.*pattern.*scheme/i);
+    });
+  });
+
+  it('degenerate pattern keys rejected: empty', () => {
+    withEnv({ MCP_PROXY_DCR_CLIENT_NAME_MAP: '{"":"client-id"}' }, () => {
+      expect(() => loadConfig()).toThrow(/empty.*whitespace/);
+    });
+  });
+
+  it('degenerate pattern keys rejected: whitespace-only', () => {
+    withEnv({ MCP_PROXY_DCR_CLIENT_NAME_MAP: '{"   ":"client-id"}' }, () => {
+      expect(() => loadConfig()).toThrow(/empty.*whitespace/);
+    });
+  });
+
+  it('degenerate pattern keys rejected: bare "*"', () => {
+    withEnv({ MCP_PROXY_DCR_CLIENT_NAME_MAP: '{"*":"client-id"}' }, () => {
+      expect(() => loadConfig()).toThrow(/bare "\*"/);
+    });
+  });
+
+  it('client_id collision with fallback + allowed_redirect_uris throws error', () => {
+    const map = { 'Cursor': { client_id: 'mcp-client', allowed_redirect_uris: 'cursor://anysphere.cursor-mcp/*' } };
+    withEnv({
+      MCP_PROXY_DCR_CLIENT_ID: 'mcp-client',
+      MCP_PROXY_DCR_CLIENT_NAME_MAP: JSON.stringify(map),
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+      MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS,
+    }, () => {
+      expect(() => loadConfig()).toThrow(/equals MCP_PROXY_DCR_CLIENT_ID/);
+    });
+  });
+
+  it('client_id collision with fallback WITHOUT allowed_redirect_uris is allowed', () => {
+    const map = { 'Cursor': 'mcp-client' };
+    withEnv({
+      MCP_PROXY_DCR_CLIENT_ID: 'mcp-client',
+      MCP_PROXY_DCR_CLIENT_NAME_MAP: JSON.stringify(map),
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+      MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS: VALID_REDIRECT_URIS,
+    }, () => {
+      expect(() => loadConfig()).not.toThrow();
+    });
+  });
+
+  it('proxyDcrEndpoint auto-enables with map alone (no MCP_PROXY_DCR_CLIENT_ID)', () => {
+    withEnv({ MCP_PROXY_DCR_CLIENT_NAME_MAP: '{"Cursor":"cursor-client"}' }, () => {
+      const cfg = loadConfig();
+      expect(cfg.proxyDcrEndpoint).toBe(true);
+      expect(cfg.clientId).toBe('');
+    });
+  });
+
+  it('proxyDcrEndpoint still works with only MCP_PROXY_DCR_CLIENT_ID (backwards compatibility)', () => {
+    withEnv({ MCP_PROXY_DCR_CLIENT_ID: 'mcp-client' }, () => {
+      const cfg = loadConfig();
+      expect(cfg.proxyDcrEndpoint).toBe(true);
+      expect(cfg.dcrClientNameMap).toEqual([]);
+    });
+  });
+
+  it('CIMD-only still skips global redirect URI requirement', () => {
+    withEnv({
+      MCP_PROXY_CIMD_DEFAULT_CLIENT_ID: 'default',
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+    }, () => {
+      expect(() => loadConfig()).not.toThrow();
+    });
+  });
+
+  it('global redirect URIs not required when all map entries have per-client patterns and no fallback', () => {
+    const map = {
+      'Cursor': { client_id: 'cursor-client', allowed_redirect_uris: 'cursor://anysphere.cursor-mcp/*' },
+      'Claude Code*': { client_id: 'claude-client', allowed_redirect_uris: 'http://localhost:*' },
+    };
+    withEnv({
+      MCP_PROXY_DCR_CLIENT_NAME_MAP: JSON.stringify(map),
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+    }, () => {
+      expect(() => loadConfig()).not.toThrow();
+      const cfg = loadConfig();
+      expect(cfg.allowedRedirectUris).toEqual([]);
+    });
+  });
+
+  it('global redirect URIs still required when fallback exists without per-client patterns', () => {
+    const map = { 'Cursor': 'cursor-client' };
+    withEnv({
+      MCP_PROXY_DCR_CLIENT_ID: 'fallback-client',
+      MCP_PROXY_DCR_CLIENT_NAME_MAP: JSON.stringify(map),
+      MCP_PROXY_AUTH_STATE_SECRET: VALID_HEX_SECRET,
+    }, () => {
+      expect(() => loadConfig()).toThrow(/MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS/);
+    });
+  });
+
+  it('reverse map construction with merging (multiple name patterns → same client_id)', () => {
+    const map = {
+      'App A': { client_id: 'shared-client', allowed_redirect_uris: 'http://localhost:*' },
+      'App B': { client_id: 'shared-client', allowed_redirect_uris: 'https://app-b.example.com/cb' },
+    };
+    withEnv({ MCP_PROXY_DCR_CLIENT_NAME_MAP: JSON.stringify(map) }, () => {
+      const cfg = loadConfig();
+      const patterns = cfg.dcrClientIdRedirectMap.get('shared-client');
+      expect(patterns).toEqual(['http://localhost:*', 'https://app-b.example.com/cb']);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseClientNameMap / matchClientName / buildClientIdRedirectMap unit tests
+// ---------------------------------------------------------------------------
+describe('parseClientNameMap (unit)', () => {
+  it('returns empty array when env is not set', () => {
+    const saved = process.env.MCP_PROXY_DCR_CLIENT_NAME_MAP;
+    delete process.env.MCP_PROXY_DCR_CLIENT_NAME_MAP;
+    expect(parseClientNameMap('MCP_PROXY_DCR_CLIENT_NAME_MAP')).toEqual([]);
+    if (saved !== undefined) process.env.MCP_PROXY_DCR_CLIENT_NAME_MAP = saved;
+  });
+
+  it('rejects object entry with missing client_id', () => {
+    process.env.TEST_NAME_MAP = '{"Cursor":{}}';
+    expect(() => parseClientNameMap('TEST_NAME_MAP')).toThrow(/non-empty.*client_id/);
+    delete process.env.TEST_NAME_MAP;
+  });
+});
+
+describe('matchClientName (unit)', () => {
+  const entries: ParsedClientNameEntry[] = [
+    { originalPattern: 'Cursor', normalizedPattern: 'cursor', isPrefix: false, clientId: 'cursor-client' },
+    { originalPattern: 'Claude Code*', normalizedPattern: 'claude code', isPrefix: true, clientId: 'claude-client' },
+  ];
+
+  it('returns null for undefined name', () => {
+    expect(matchClientName(undefined, entries)).toBeNull();
+  });
+
+  it('returns null for empty entries', () => {
+    expect(matchClientName('Cursor', [])).toBeNull();
+  });
+
+  it('matches exact case-insensitively', () => {
+    const result = matchClientName('CURSOR', entries);
+    expect(result?.clientId).toBe('cursor-client');
+  });
+
+  it('matches prefix with suffix', () => {
+    const result = matchClientName('Claude Code (test)', entries);
+    expect(result?.clientId).toBe('claude-client');
+  });
+
+  it('returns null for no match', () => {
+    expect(matchClientName('Unknown', entries)).toBeNull();
+  });
+});
+
+describe('buildClientIdRedirectMap (unit)', () => {
+  it('groups entries by clientId and merges patterns', () => {
+    const entries: ParsedClientNameEntry[] = [
+      { originalPattern: 'A', normalizedPattern: 'a', isPrefix: false, clientId: 'shared', allowedRedirectUris: ['http://a/*'] },
+      { originalPattern: 'B', normalizedPattern: 'b', isPrefix: false, clientId: 'shared', allowedRedirectUris: ['http://b/*'] },
+      { originalPattern: 'C', normalizedPattern: 'c', isPrefix: false, clientId: 'other', allowedRedirectUris: ['http://c/*'] },
+    ];
+    const map = buildClientIdRedirectMap(entries);
+    expect(map.get('shared')).toEqual(['http://a/*', 'http://b/*']);
+    expect(map.get('other')).toEqual(['http://c/*']);
+  });
+
+  it('skips entries without allowedRedirectUris', () => {
+    const entries: ParsedClientNameEntry[] = [
+      { originalPattern: 'A', normalizedPattern: 'a', isPrefix: false, clientId: 'shared' },
+    ];
+    const map = buildClientIdRedirectMap(entries);
+    expect(map.size).toBe(0);
+  });
+
+  it('deduplicates merged patterns', () => {
+    const entries: ParsedClientNameEntry[] = [
+      { originalPattern: 'A', normalizedPattern: 'a', isPrefix: false, clientId: 'shared', allowedRedirectUris: ['http://a/*'] },
+      { originalPattern: 'B', normalizedPattern: 'b', isPrefix: false, clientId: 'shared', allowedRedirectUris: ['http://a/*'] },
+    ];
+    const map = buildClientIdRedirectMap(entries);
+    expect(map.get('shared')).toEqual(['http://a/*']);
   });
 });

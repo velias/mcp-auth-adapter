@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { createApp } from '../src/app';
-import { AppConfig } from '../src/config';
+import { AppConfig, ParsedClientNameEntry, buildClientIdRedirectMap } from '../src/config';
 
 const MOCK_UPSTREAM_DOC: Record<string, unknown> = {
   issuer: 'https://sso.example.com/auth/realms/test',
@@ -28,6 +28,8 @@ const CONFIG: AppConfig = {
   allowedRedirectUris: [],
   requireResource: false,
   allowedResources: [],
+  dcrClientNameMap: [],
+  dcrClientIdRedirectMap: new Map(),
 };
 
 function makeApp(configOverrides: Partial<AppConfig> = {}) {
@@ -349,5 +351,399 @@ describe('POST /register (DCR Proxy)', () => {
 
       expect(res.status).toBe(415);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Client name mapping
+// ---------------------------------------------------------------------------
+describe('POST /register (client name mapping)', () => {
+  const CURSOR_ENTRY: ParsedClientNameEntry = {
+    originalPattern: 'Cursor',
+    normalizedPattern: 'cursor',
+    isPrefix: false,
+    clientId: 'cursor-sso-client',
+  };
+
+  const CLAUDE_ENTRY: ParsedClientNameEntry = {
+    originalPattern: 'Claude Code*',
+    normalizedPattern: 'claude code',
+    isPrefix: true,
+    clientId: 'claude-sso-client',
+  };
+
+  const NAME_MAP = [CURSOR_ENTRY, CLAUDE_ENTRY];
+
+  function makeAppWithMap(overrides: Partial<AppConfig> = {}) {
+    return createApp({
+      config: {
+        ...CONFIG,
+        clientId: 'default-client',
+        dcrClientNameMap: NAME_MAP,
+        dcrClientIdRedirectMap: buildClientIdRedirectMap(NAME_MAP),
+        ...overrides,
+      },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    }).app;
+  }
+
+  it('exact match returns mapped client_id', async () => {
+    const app = makeAppWithMap();
+    const res = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: 'Cursor' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.client_id).toBe('cursor-sso-client');
+  });
+
+  it('prefix match with parenthesized suffix returns mapped client_id', async () => {
+    const app = makeAppWithMap();
+    const res = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: 'Claude Code (rh-product-mcp)' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.client_id).toBe('claude-sso-client');
+  });
+
+  it('case-insensitive matching', async () => {
+    const app = makeAppWithMap();
+    const res = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: 'CURSOR' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.client_id).toBe('cursor-sso-client');
+  });
+
+  it('exact match takes priority over prefix match', async () => {
+    const exactAndPrefix: ParsedClientNameEntry[] = [
+      { originalPattern: 'Claude Code*', normalizedPattern: 'claude code', isPrefix: true, clientId: 'prefix-client' },
+      { originalPattern: 'Claude Code', normalizedPattern: 'claude code', isPrefix: false, clientId: 'exact-client' },
+    ];
+    const app = createApp({
+      config: {
+        ...CONFIG,
+        clientId: 'default-client',
+        dcrClientNameMap: exactAndPrefix,
+        dcrClientIdRedirectMap: buildClientIdRedirectMap(exactAndPrefix),
+      },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    }).app;
+
+    const res = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: 'Claude Code' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.client_id).toBe('exact-client');
+  });
+
+  it('unmatched client_name falls back to default', async () => {
+    const app = makeAppWithMap();
+    const res = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: 'Unknown App' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.client_id).toBe('default-client');
+  });
+
+  it('unmatched client_name without default returns 400', async () => {
+    const app = makeAppWithMap({ clientId: '' });
+    const res = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: 'Unknown App' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_client_metadata');
+    expect(res.body.error_description).toContain('client_name');
+  });
+
+  it('missing client_name falls back to default', async () => {
+    const app = makeAppWithMap();
+    const res = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({});
+
+    expect(res.status).toBe(201);
+    expect(res.body.client_id).toBe('default-client');
+  });
+
+  it('missing client_name without default returns 400', async () => {
+    const app = makeAppWithMap({ clientId: '' });
+    const res = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_client_metadata');
+  });
+
+  it('whitespace-only client_name treated as missing', async () => {
+    const app = makeAppWithMap({ clientId: '' });
+    const res = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: '   ' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_client_metadata');
+  });
+
+  it('redirect_uris in DCR body are NOT validated against per-client patterns', async () => {
+    const entriesWithPatterns: ParsedClientNameEntry[] = [{
+      originalPattern: 'Cursor',
+      normalizedPattern: 'cursor',
+      isPrefix: false,
+      clientId: 'cursor-sso-client',
+      allowedRedirectUris: ['cursor://anysphere.cursor-mcp/*'],
+    }];
+    const app = createApp({
+      config: {
+        ...CONFIG,
+        clientId: 'default-client',
+        dcrClientNameMap: entriesWithPatterns,
+        dcrClientIdRedirectMap: buildClientIdRedirectMap(entriesWithPatterns),
+      },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    }).app;
+
+    const res = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({
+        client_name: 'Cursor',
+        redirect_uris: ['http://localhost:8080/callback'],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.client_id).toBe('cursor-sso-client');
+  });
+
+  it('auto-enable: map-only config → endpoint active', async () => {
+    const app = createApp({
+      config: {
+        ...CONFIG,
+        clientId: '',
+        proxyDcrEndpoint: true,
+        dcrClientNameMap: NAME_MAP,
+        dcrClientIdRedirectMap: buildClientIdRedirectMap(NAME_MAP),
+      },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    }).app;
+
+    const resMatched = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: 'Cursor' });
+    expect(resMatched.status).toBe(201);
+
+    const resUnmatched = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: 'Unknown' });
+    expect(resUnmatched.status).toBe(400);
+  });
+
+  it('backwards compatibility: neither map nor default → 404', async () => {
+    const app = createApp({
+      config: {
+        ...CONFIG,
+        clientId: '',
+        proxyDcrEndpoint: false,
+        dcrClientNameMap: [],
+        dcrClientIdRedirectMap: new Map(),
+      },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    }).app;
+
+    const res = await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: 'Cursor' });
+
+    expect(res.status).toBe(404);
+  });
+
+  describe('mcp_auth_dcr_registrations_total metric', () => {
+    it('incremented with correct idp_client and match_type on success', async () => {
+      const { app } = createApp({
+        config: {
+          ...CONFIG,
+          clientId: 'default-client',
+          metricsEnabled: true,
+          dcrClientNameMap: NAME_MAP,
+          dcrClientIdRedirectMap: buildClientIdRedirectMap(NAME_MAP),
+        },
+        upstreamDoc: MOCK_UPSTREAM_DOC,
+      });
+
+      await request(app)
+        .post('/register')
+        .set('Content-Type', 'application/json')
+        .send({ client_name: 'Cursor' });
+
+      await request(app)
+        .post('/register')
+        .set('Content-Type', 'application/json')
+        .send({ client_name: 'Claude Code (test)' });
+
+      await request(app)
+        .post('/register')
+        .set('Content-Type', 'application/json')
+        .send({ client_name: 'Unknown App' });
+
+      const metricsRes = await request(app).get('/metrics');
+      expect(metricsRes.text).toContain('mcp_auth_dcr_registrations_total{idp_client="cursor-sso-client",match_type="exact"} 1');
+      expect(metricsRes.text).toContain('mcp_auth_dcr_registrations_total{idp_client="claude-sso-client",match_type="prefix"} 1');
+      expect(metricsRes.text).toContain('mcp_auth_dcr_registrations_total{idp_client="default-client",match_type="default"} 1');
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Access log content tests
+// ---------------------------------------------------------------------------
+describe('POST /register (access log content)', () => {
+  const CURSOR_ENTRY: ParsedClientNameEntry = {
+    originalPattern: 'Cursor',
+    normalizedPattern: 'cursor',
+    isPrefix: false,
+    clientId: 'cursor-client',
+  };
+
+  const CLAUDE_ENTRY: ParsedClientNameEntry = {
+    originalPattern: 'Claude Code*',
+    normalizedPattern: 'claude code',
+    isPrefix: true,
+    clientId: 'claude-client',
+  };
+
+  const NAME_MAP = [CURSOR_ENTRY, CLAUDE_ENTRY];
+
+  function makeAppWithAccessLog(overrides: Partial<AppConfig> = {}) {
+    return createApp({
+      config: {
+        ...CONFIG,
+        accessLog: true,
+        clientId: 'default-client',
+        dcrClientNameMap: NAME_MAP,
+        dcrClientIdRedirectMap: buildClientIdRedirectMap(NAME_MAP),
+        ...overrides,
+      },
+      upstreamDoc: MOCK_UPSTREAM_DOC,
+    }).app;
+  }
+
+  let logLines: string[];
+
+  beforeEach(() => {
+    logLines = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logLines.push(String(args[0]));
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function findLogLine(substring: string): string | undefined {
+    return logLines.find(l => l.includes(substring));
+  }
+
+  it('includes idpClient and matchedMapping for exact match', async () => {
+    const app = makeAppWithAccessLog();
+    await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: 'Cursor' });
+
+    const line = findLogLine('DCR register request');
+    expect(line).toBeDefined();
+    expect(line).toContain('idpClient="cursor-client"');
+    expect(line).toContain('matchedMapping="exact:Cursor"');
+  });
+
+  it('includes idpClient and matchedMapping for prefix match', async () => {
+    const app = makeAppWithAccessLog();
+    await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: 'Claude Code (rh-product-mcp)' });
+
+    const line = findLogLine('DCR register request');
+    expect(line).toBeDefined();
+    expect(line).toContain('idpClient="claude-client"');
+    expect(line).toContain('matchedMapping="prefix:Claude Code*"');
+  });
+
+  it('includes idpClient for fallback, matchedMapping absent', async () => {
+    const app = makeAppWithAccessLog();
+    await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: 'Unknown App' });
+
+    const line = findLogLine('DCR register request');
+    expect(line).toBeDefined();
+    expect(line).toContain('idpClient="default-client"');
+    expect(line).not.toContain('matchedMapping=');
+  });
+
+  it('omits matchedMapping when no client_name provided', async () => {
+    const app = makeAppWithAccessLog();
+    await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({});
+
+    const line = findLogLine('DCR register request');
+    expect(line).toBeDefined();
+    expect(line).toContain('idpClient="default-client"');
+    expect(line).not.toContain('matchedMapping=');
+  });
+
+  it('truncates clientName to 200 characters for long values', async () => {
+    const app = makeAppWithAccessLog();
+    const longName = 'A'.repeat(300);
+    await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({ client_name: longName });
+
+    const line = findLogLine('DCR register request');
+    expect(line).toBeDefined();
+    expect(line).toContain(`clientName="${'A'.repeat(200)}"`);
+    expect(line).not.toContain('A'.repeat(201));
+  });
+
+  it('still includes existing fields alongside new fields', async () => {
+    const app = makeAppWithAccessLog();
+    await request(app)
+      .post('/register')
+      .set('Content-Type', 'application/json')
+      .send({
+        client_name: 'Cursor',
+        software_id: 'cursor-ide',
+        redirect_uris: ['http://localhost:8080/cb'],
+      });
+
+    const line = findLogLine('DCR register request');
+    expect(line).toBeDefined();
+    expect(line).toContain('clientName="Cursor"');
+    expect(line).toContain('softwareId="cursor-ide"');
+    expect(line).toContain('redirectUriCount="1"');
+    expect(line).toContain('idpClient="cursor-client"');
   });
 });

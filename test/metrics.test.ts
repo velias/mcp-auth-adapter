@@ -192,6 +192,8 @@ const BASE_CONFIG: AppConfig = {
   allowedRedirectUris: ['http://localhost:*'],
   requireResource: false,
   allowedResources: [],
+  dcrClientNameMap: [],
+  dcrClientIdRedirectMap: new Map(),
 };
 
 describe('/metrics endpoint', () => {
