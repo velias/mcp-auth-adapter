@@ -59,6 +59,7 @@ function createInstrumentedRefresh(
   log: Logger,
   metricsRegistry: IMetricsRegistry,
   updateUpstream: (doc: Record<string, unknown>) => void,
+  updateUpstreamHealth: (success: boolean, error?: string) => void,
 ): InstrumentedRefresh {
   const refreshTotal = metricsRegistry.createCounter('mcp_auth_upstream_refresh_total', 'Upstream well-known refresh attempts');
   const refreshDuration = metricsRegistry.createGauge('mcp_auth_upstream_refresh_duration_seconds', 'Last upstream refresh duration in seconds');
@@ -72,6 +73,7 @@ function createInstrumentedRefresh(
       refreshDuration.set(durationSec);
       refreshLastSuccess.set(Math.floor(Date.now() / 1000));
       updateUpstream(newDoc);
+      updateUpstreamHealth(true);
       log.info('Upstream well-known document refreshed');
       for (const warning of validateUpstreamDoc(newDoc)) {
         log.warn(warning);
@@ -80,6 +82,7 @@ function createInstrumentedRefresh(
       const durationSec = Number(process.hrtime.bigint() - start) / 1e9;
       refreshTotal.inc({ result: 'error' });
       refreshDuration.set(durationSec);
+      updateUpstreamHealth(false, String(err));
       log.warn('Failed to refresh upstream well-known, keeping previous', { error: String(err) });
     });
   }) as InstrumentedRefresh;
@@ -123,13 +126,13 @@ async function main(): Promise<void> {
   }
   const initialFetchDuration = Number(process.hrtime.bigint() - fetchStart) / 1e9;
 
-  const { app, metricsRegistry, updateUpstream, setShuttingDown } = createApp({
+  const { app, metricsRegistry, updateUpstream, updateUpstreamHealth, setShuttingDown } = createApp({
     config,
     upstreamDoc,
     fromFallback: !initialFetchOk,
   });
 
-  const doRefresh = createInstrumentedRefresh(config.upstreamSsoUrl, log, metricsRegistry, updateUpstream);
+  const doRefresh = createInstrumentedRefresh(config.upstreamSsoUrl, log, metricsRegistry, updateUpstream, updateUpstreamHealth);
   doRefresh.recordInitial(initialFetchOk, initialFetchDuration);
   const refreshMs = config.wellKnownRefreshMinutes * 60 * 1000;
   const refreshTimer = setInterval(doRefresh, refreshMs);

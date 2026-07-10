@@ -93,7 +93,7 @@ src/
     authorize.ts     # GET /authorize — redirect adapter, scope filtering, state wrapping, CIMD
     authorize-callback.ts # GET /authorize/callback — iss interception, state verification
     token.ts         # POST /token — unified token proxy with redirect_uri rewriting
-    health.ts        # /health/live, /health/ready
+    health.ts        # /health (composite check with upstream probe), /health/live, /health/ready; exports UpstreamHealth, createUpstreamProbe
     metrics.ts       # GET /metrics — Prometheus text exposition format endpoint
 test/
   well-known.test.ts          # Well-known doc content, whitelist, cache-control, refresh, CIMD fields
@@ -105,7 +105,7 @@ test/
   uri-validation.test.ts      # URI security checks, pattern matching
   cimd.test.ts                # CIMD URL/doc validation, cache, resolution, IP checks
   cimd-fetch.test.ts          # CIMD fetch with mocked HTTP: SSRF, size, timeout, content-type
-  health.test.ts              # Liveness/readiness probes
+  health.test.ts              # Liveness/readiness probes, composite /health check, upstream probe unit tests
   metrics.test.ts             # Metrics primitives, no-op stubs, /metrics endpoint, config parsing
   logger.test.ts              # Log formatting: consistent quoting, double-quote replacement, levels, meta handling
   config.test.ts              # Config parsing, validation, auto-enable logic
@@ -130,6 +130,13 @@ test/
   `upstreamTokenEndpoint` (used by the token proxy), `upstreamIssuer` (for
   RFC 9207 validation), and `upstreamSupportsIss` (derived from upstream
   metadata, defaults to `false` when the upstream doc cannot be fetched).
+- **Upstream health probe.** `GET /health` performs a rate-limited live probe of the
+  upstream well-known endpoint (HEAD with 5s timeout, GET fallback on 405). The
+  probe result is cached for 30 seconds; concurrent requests share the same
+  in-flight promise (deduplication). The mutable `UpstreamHealth` state
+  (in `app.ts`) is shared between the live probe and the periodic well-known
+  refresh in `index.ts` — both update the same object via `updateUpstreamHealth()`.
+  The probe only checks reachability; it does not update the well-known document.
 - **Graceful shutdown.** `SIGTERM`/`SIGINT` set `shuttingDown` (readiness probe
   returns 503), clear the refresh timer, and call `server.close()` to drain
   in-flight requests with a configurable force-exit timeout.
