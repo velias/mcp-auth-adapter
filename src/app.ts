@@ -8,7 +8,7 @@ import { buildWellKnownDocument, createWellKnownRouter } from './routes/well-kno
 import { createRegisterRouter } from './routes/register';
 import { createAuthorizeRouter } from './routes/authorize';
 import { createAuthorizeCallbackRouter } from './routes/authorize-callback';
-import { createHealthRouter } from './routes/health';
+import { createHealthRouter, createUpstreamProbe, UpstreamHealth } from './routes/health';
 import { createMetricsRouter } from './routes/metrics';
 import { createTokenRouter } from './routes/token';
 import {
@@ -61,6 +61,7 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
   app: Application;
   metricsRegistry: IMetricsRegistry;
   updateUpstream: (newUpstreamDoc: Record<string, unknown>) => void;
+  updateUpstreamHealth: (success: boolean, error?: string) => void;
   setShuttingDown: () => void;
   isShuttingDown: () => boolean;
 } {
@@ -86,10 +87,30 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
     state = buildUpstreamState(newUpstreamDoc, config);
   };
 
+  const upstreamHealth: UpstreamHealth = {
+    url: config.upstreamSsoUrl,
+    lastSuccessAt: fromFallback ? null : Date.now(),
+    lastError: null,
+    lastErrorAt: null,
+    usingFallback: !!fromFallback,
+  };
+
+  const updateUpstreamHealth = (success: boolean, error?: string) => {
+    if (success) {
+      upstreamHealth.lastSuccessAt = Date.now();
+      upstreamHealth.usingFallback = false;
+    } else {
+      upstreamHealth.lastError = error ?? 'unknown error';
+      upstreamHealth.lastErrorAt = Date.now();
+    }
+  };
+
+  const probeUpstream = createUpstreamProbe(upstreamHealth);
+
   const app = express();
   app.disable('x-powered-by');
 
-  app.use(createHealthRouter(isShuttingDown));
+  app.use(createHealthRouter(isShuttingDown, () => upstreamHealth, probeUpstream));
   app.use(compression());
 
   if (config.metricsEnabled) {
@@ -223,5 +244,5 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
     }
   });
 
-  return { app, metricsRegistry, updateUpstream, setShuttingDown, isShuttingDown };
+  return { app, metricsRegistry, updateUpstream, updateUpstreamHealth, setShuttingDown, isShuttingDown };
 }

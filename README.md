@@ -506,10 +506,11 @@ The adapter serves the following paths. Your reverse proxy (Ingress, nginx, HAPr
 | `/authorize` | Public | Authorization proxy |
 | `/authorize/callback` | Public | ISS interception callback (v2.0+) |
 | `/token` | Public | Token proxy (v2.0+) |
+| `/health` | **Internal only** | Composite health check with upstream IdP probe |
 | `/health/live`, `/health/ready` | **Internal only** | Kubernetes probes |
 | `/metrics` | **Internal only** | Prometheus scraping (if enabled) |
 
-Internal endpoints are unauthenticated — keep them behind cluster-internal networking, not on public ingress. They expose only operational data (no tokens, client_ids, or user data).
+Internal endpoints are unauthenticated — keep them behind cluster-internal networking, not on public ingress. They expose only operational data (no tokens, client_ids, or user data). External monitoring tools (e.g. Catchpoint) should use internal/private agents or proxies to reach health and metrics endpoints — do not expose them on public ingress.
 
 ### Upstream IdP Compatibility
 
@@ -519,10 +520,39 @@ Review startup logs for warnings prefixed with `Upstream IdP compatibility:` —
 
 | Endpoint | Purpose | Response |
 |---|---|---|
-| `GET /health/live` | **Liveness** - process is running, HTTP listener responsive | `200` always |
-| `GET /health/ready` | **Readiness** - application initialized, ready to serve | `200` normally, `503` during graceful shutdown |
+| `GET /health` | **Composite health check** — per-component status for adapter and upstream IdP | `200` JSON when ok, `503` JSON when error |
+| `GET /health/live` | **Liveness** — process is running, HTTP listener responsive | `200` always |
+| `GET /health/ready` | **Readiness** — application initialized, ready to serve | `200` normally, `503` during graceful shutdown |
 
-Both are mounted before body-parsing middleware. Neither checks upstream IdP availability - the adapter is functional even with fallback defaults.
+All health endpoints are mounted before body-parsing middleware. `/health/live` and `/health/ready` do not check upstream IdP availability — the adapter is functional even with fallback defaults. Use `/health` for detailed diagnostics that include upstream IdP reachability.
+
+### Composite Health Check (`GET /health`)
+
+Returns a JSON response with per-component status, making it clear whether a problem is in the adapter itself or in the upstream IdP.
+
+```json
+{
+  "status": "ok",
+  "checks": { "adapter": "ok", "upstream_idp": "ok" },
+  "upstream_idp": {
+    "url": "https://sso.example.com/auth/realms/external",
+    "last_success_at": "2026-07-10T12:00:00.000Z"
+  }
+}
+```
+
+| Status | Meaning | HTTP code |
+|---|---|---|
+| `ok` | All components healthy — upstream IdP is reachable | `200` |
+| `error` | Unhealthy — upstream IdP is unreachable, or adapter is shutting down | `503` |
+
+The overall `status` is `error` if any component is in error, `ok` otherwise. A `message` field is present when status is `error`. The `upstream_idp` object includes `url`, `last_success_at`, `last_error`, `last_error_at`, and `using_fallback` (when the adapter has never fetched the upstream document and is using fallback config). Use `last_success_at` to distinguish a brief outage from a prolonged one.
+
+**How the upstream probe works:** The adapter sends an HTTP HEAD request to `{MCP_UPSTREAM_SSO_URL}/.well-known/openid-configuration` with a 5-second timeout (GET fallback if HEAD returns 405). The probe only checks reachability — it does not update the cached well-known document.
+
+**Probe rate limiting:** The probe result is cached for **30 seconds**. Repeated `/health` requests within that window reuse the cached result without contacting the upstream IdP. Concurrent requests during a probe share the same in-flight check (deduplication). Upstream failures are detected within at most 30 seconds.
+
+**Note:** This checks reachability from the adapter's perspective only. It is not a substitute for monitoring the upstream IdP directly — upstream internal errors that still return 2xx on the well-known endpoint will not be detected.
 
 ### Graceful Shutdown
 
