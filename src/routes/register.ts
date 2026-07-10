@@ -1,11 +1,12 @@
 import { Router, Request, Response } from 'express';
-import { AppConfig } from '../config';
+import { ParsedClientNameEntry, matchClientName } from '../config';
 import { Logger } from '../logger';
-import { ICounter } from '../metrics';
+import { ICounter, IMetricsRegistry } from '../metrics';
 import { requireJsonContentType } from '../middleware/security';
 import { validateRedirectUriSecurity } from '../uri-validation';
 
 const ROUTE = '/register';
+const CLIENT_NAME_LOG_MAX = 200;
 const DCR_ECHO_FIELDS = [
   'redirect_uris',
   'grant_types',
@@ -59,24 +60,44 @@ export function validateStringArray(field: string, value: unknown): ValidationEr
   return null;
 }
 
-export function createRegisterRouter(config: AppConfig, logger: Logger, rejectedTotal: ICounter): Router {
+export interface RegisterRouterConfig {
+  defaultClientId?: string;
+  dcrClientNameMap: ParsedClientNameEntry[];
+  rejectedTotal: ICounter;
+  metricsRegistry?: IMetricsRegistry;
+  knownIdpClients?: Set<string>;
+}
+
+export function createRegisterRouter(config: RegisterRouterConfig, logger: Logger): Router {
   const router = Router();
+
+  const registrationsTotal = config.metricsRegistry?.createCounter(
+    'mcp_auth_dcr_registrations_total',
+    'Successful DCR registrations',
+  );
 
   router.post('/register', requireJsonContentType, (req: Request, res: Response) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
-    logger.accessLog('DCR register request', req, res, {
-      clientName: typeof body.client_name === 'string' ? body.client_name : undefined,
+    const rawClientName = typeof body.client_name === 'string' ? body.client_name : undefined;
+    const truncatedClientName = rawClientName
+      ? (rawClientName.length > CLIENT_NAME_LOG_MAX ? rawClientName.slice(0, CLIENT_NAME_LOG_MAX) : rawClientName)
+      : undefined;
+
+    const baseLogMeta = {
+      clientName: truncatedClientName,
       softwareId: typeof body.software_id === 'string' ? body.software_id : undefined,
       scope: typeof body.scope === 'string' ? body.scope : undefined,
       grantTypes: Array.isArray(body.grant_types) ? (body.grant_types as unknown[]).join(',') : undefined,
       redirectUriCount: Array.isArray(body.redirect_uris) ? body.redirect_uris.length : 0,
-    });
+    };
 
     if (body.redirect_uris !== undefined) {
       const err = validateRedirectUris(body.redirect_uris);
       if (err) {
-        rejectedTotal.inc({ route: ROUTE, reason: 'invalid_redirect_uris' });
+        logger.warn('DCR: invalid redirect_uris', { field: err.field, reason: err.reason, clientName: truncatedClientName });
+        logger.accessLog('DCR register request', req, res, baseLogMeta);
+        config.rejectedTotal.inc({ route: ROUTE, reason: 'invalid_redirect_uris' });
         res.status(400).json({
           error: 'invalid_client_metadata',
           error_description: `${err.field}: ${err.reason}`,
@@ -89,7 +110,9 @@ export function createRegisterRouter(config: AppConfig, logger: Logger, rejected
       if (body[field] !== undefined) {
         const err = validateStringArray(field, body[field]);
         if (err) {
-          rejectedTotal.inc({ route: ROUTE, reason: `invalid_${field}` });
+          logger.warn(`DCR: invalid ${field}`, { field: err.field, reason: err.reason, clientName: truncatedClientName });
+          logger.accessLog('DCR register request', req, res, baseLogMeta);
+          config.rejectedTotal.inc({ route: ROUTE, reason: `invalid_${field}` });
           res.status(400).json({
             error: 'invalid_client_metadata',
             error_description: `${err.field}: ${err.reason}`,
@@ -99,8 +122,54 @@ export function createRegisterRouter(config: AppConfig, logger: Logger, rejected
       }
     }
 
+    // Resolve client_id via client_name mapping
+    let resolvedClientId: string;
+    let matchedMapping: string | undefined;
+    let matchType: string;
+
+    const matched = matchClientName(rawClientName, config.dcrClientNameMap);
+    if (matched) {
+      resolvedClientId = matched.clientId;
+      matchedMapping = matched.isPrefix
+        ? `prefix:${matched.originalPattern}`
+        : `exact:${matched.originalPattern}`;
+      matchType = matched.isPrefix ? 'prefix' : 'exact';
+    } else if (config.defaultClientId) {
+      resolvedClientId = config.defaultClientId;
+      matchType = 'default';
+    } else {
+      logger.warn('DCR: unknown client_name rejected (no match, no default)', { clientName: truncatedClientName });
+      logger.accessLog('DCR register request', req, res, baseLogMeta);
+      config.rejectedTotal.inc({ route: ROUTE, reason: 'client_name_unknown' });
+      res.status(400).json({
+        error: 'invalid_client_metadata',
+        error_description: 'Unknown client: client_name does not match any configured mapping and no default client_id is configured',
+      });
+      return;
+    }
+
+    if (logger.isDebugEnabled) logger.debug('DCR: client_id resolved', {
+      clientName: truncatedClientName,
+      resolvedClientId,
+      matchType,
+      matchedMapping,
+    });
+
+    const metricsLabels: Record<string, string> = { match_type: matchType };
+    if (config.knownIdpClients?.has(resolvedClientId)) {
+      metricsLabels.idp_client = resolvedClientId;
+    }
+
+    logger.accessLog('DCR register request', req, res, {
+      ...baseLogMeta,
+      idpClient: resolvedClientId,
+      matchedMapping,
+    });
+
+    registrationsTotal?.inc(metricsLabels);
+
     const response: Record<string, unknown> = {
-      client_id: config.clientId,
+      client_id: resolvedClientId,
       token_endpoint_auth_method: 'none',
     };
 

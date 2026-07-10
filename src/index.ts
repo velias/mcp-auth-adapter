@@ -143,6 +143,8 @@ async function main(): Promise<void> {
       issInterception: config.proxyAuthEndpoint ? 'enabled' : 'disabled',
       tokenProxy: config.proxyAuthEndpoint ? 'enabled' : 'disabled',
       dcrProxy: config.proxyDcrEndpoint ? 'enabled' : 'disabled',
+      dcrClientNameMap: config.dcrClientNameMap.length > 0 ? `${config.dcrClientNameMap.length} entries` : 'disabled',
+      dcrPerClientRedirectUris: config.dcrClientIdRedirectMap.size > 0 ? `${config.dcrClientIdRedirectMap.size} client_ids` : 'disabled',
       cimdProxy: config.cimdEnabled ? 'enabled (EXPERIMENTAL)' : 'disabled',
       allowedRedirectUris: config.allowedRedirectUris.length,
       resourceValidation: config.requireResource ? 'enforced' : (config.allowedResources.length > 0 ? `allowlist[${config.allowedResources.length}]` : 'passthrough'),

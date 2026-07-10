@@ -58,6 +58,8 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     allowedRedirectUris: ['http://localhost:*'],
     requireResource: false,
     allowedResources: [],
+    dcrClientNameMap: [],
+    dcrClientIdRedirectMap: new Map(),
     ...overrides,
   };
 }

@@ -28,6 +28,8 @@ const CONFIG: AppConfig = {
   allowedRedirectUris: [],
   requireResource: false,
   allowedResources: [],
+  dcrClientNameMap: [],
+  dcrClientIdRedirectMap: new Map(),
 };
 
 function makeApp() {

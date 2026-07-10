@@ -22,7 +22,7 @@ MCP servers [announce this adapter as their authorization server](https://modelc
 ### Features
 
 - **Well-known discovery** - filtered, MCP-focused view of the upstream IdP metadata with injected adapter endpoints and tailored configurations. See [Upstream Well-Known Handling](#upstream-well-known-handling).
-- **Open Dynamic Client Registration (DCR)** (optional) - returns a pre-configured fixed `client_id` for all registering MCP clients per [RFC 7591](https://rfc-editor.org/rfc/rfc7591). See [Open DCR and its Security Limitations](#open-dcr-and-its-security-limitations).
+- **Open Dynamic Client Registration (DCR)** (optional) - returns a pre-configured `client_id` for registering MCP clients per [RFC 7591](https://rfc-editor.org/rfc/rfc7591). Supports per-MCP-client IdP client mapping based on `client_name` with optional per-client redirect URI enforcement. See [Open DCR and its Security Limitations](#open-dcr-and-its-security-limitations) and [Per-MCP-Client IdP Client Mapping](#per-mcp-client-idp-client-mapping).
 - **Scope filtering** (optional) - intercepts authorization requests to modify scopes before redirecting to the upstream IdP.
 - **RFC 9207 `iss` parameter validation** - mandatory authorization response issuer verification preventing OAuth mix-up attacks per the MCP Auth Spec. See [RFC 9207 iss parameter validation](#rfc-9207-iss-parameter-validation).
 - **Resource parameter validation** (optional) - validates the [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) `resource` parameter required by the MCP specification, with configurable enforcement, format checking, and allowlist filtering. See [Resource Parameter Validation (RFC 8707)](#resource-parameter-validation-rfc-8707).
@@ -106,12 +106,13 @@ Environment variables are used. All variables are prefixed with `MCP_`. A `.env`
 | `MCP_PORT` | No | `3000` | Port this app listens on. |
 | `MCP_SHUTDOWN_TIMEOUT_SECONDS` | No | `30` | Maximum seconds to wait for in-flight requests to drain after `SIGTERM`/`SIGINT` before force-exiting. |
 | | | | **Dynamic Client Registration** |
-| `MCP_PROXY_DCR_CLIENT_ID` | No | -- | Fixed `client_id` returned by `POST /register`. Setting this enables the DCR proxy. Must be pre-registered at the upstream IdP as a public client. If omitted, the upstream IdP's registration endpoint is announced directly. |
+| `MCP_PROXY_DCR_CLIENT_ID` | No | -- | Default `client_id` returned by `POST /register`. Setting this enables the DCR proxy. Must be pre-registered at the upstream IdP as a public client. When `MCP_PROXY_DCR_CLIENT_NAME_MAP` is also set, this serves as the fallback for unmatched client names. |
+| `MCP_PROXY_DCR_CLIENT_NAME_MAP` | No | -- | JSON object mapping `client_name` patterns to upstream IdP client_ids, with optional per-client redirect URI restrictions. Setting this enables the DCR proxy (even without `MCP_PROXY_DCR_CLIENT_ID`). See [Per-MCP-Client IdP Client Mapping](#per-mcp-client-idp-client-mapping). |
 | | | | **RFC 9207 iss interception** (auto-enables `/authorize` + `/token` proxy) |
 | `MCP_PROXY_AUTH_STATE_SECRET` | Conditional | -- | Hex-encoded HMAC secret for signing state blobs (min 32 bytes = 64 hex chars). **Required when the `/authorize` proxy is active** (scope filtering, CIMD, or standalone). Generate with `openssl rand -hex 32`. Must be identical across all pods. |
 | `MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS` | No | -- | Previous HMAC secret for zero-downtime key rotation (same format). Set to the old key during rotation; remove after TTL has elapsed. |
 | `MCP_PROXY_AUTH_STATE_TTL_MINUTES` | No | `30` | How long (minutes) the signed state blob remains valid. Must cover full user interaction at the upstream IdP (login + registration + MFA + consent). |
-| `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` | Conditional | -- | Comma-separated allowed redirect URI patterns. Trailing `*` = prefix match, no `*` = exact match. **Required when `/authorize` proxy is active** (unless CIMD-only). See [known MCP client patterns](#known-mcp-client-redirect-uri-patterns) for common values. |
+| `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` | Conditional | -- | Comma-separated allowed redirect URI patterns. Trailing `*` = prefix match, no `*` = exact match. **Required when `/authorize` proxy is active** (unless CIMD-only, or all `MCP_PROXY_DCR_CLIENT_NAME_MAP` entries have per-client `allowed_redirect_uris` with no fallback `MCP_PROXY_DCR_CLIENT_ID`). See [known MCP client patterns](#known-mcp-client-redirect-uri-patterns) for common values. |
 | | | | **Scope filtering** (auto-enables `/authorize` proxy) |
 | `MCP_PROXY_AUTH_SCOPES_REMOVED` | No | -- | Comma-separated scopes to strip from `/authorize` requests (e.g. `offline_access`). Ignored if `MCP_PROXY_AUTH_SCOPES_PRESERVED` is also set. |
 | `MCP_PROXY_AUTH_SCOPES_PRESERVED` | No | -- | Comma-separated scopes to keep in `/authorize` requests; all others are stripped. Takes precedence over `MCP_PROXY_AUTH_SCOPES_REMOVED`. |
@@ -143,6 +144,67 @@ IdP do not know who is asking for the `client_id`. Two emerging standards addres
 - **Client ID Metadata Documents (CIMD)** - the `client_id` is an HTTPS URL pointing to a metadata document. Default mechanism in the [MCP Auth Spec (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#client-id-metadata-documents), not yet universally adopted. **This adapter includes experimental CIMD support** - see [CIMD Adapter](#cimd-adapter-experimental).
 
 Until "DCR with SSA" or CIMD is widely supported, user consent during login at the upstream IdP is the last line of defense. This is an [accepted limitation of the MCP auth ecosystem](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#localhost-redirect-uri-risks).
+
+Per-client IdP client mapping (see below) provides partial mitigation: operators can isolate IdP clients per MCP application.
+
+## Per-MCP-Client IdP Client Mapping
+
+Operators often want different MCP clients (Cursor, Claude Code, VS Code, etc.) to use different upstream IdP clients — for per-client consent screens, scope policies, audit logging, and access revocation. DCR client name mapping (below) and [CIMD client mapping](#cimd-adapter-experimental) both support this, using different client identification methods. For how redirect URIs are validated across all client types, see [Redirect URIs at the upstream IdP](#redirect-uris-at-the-upstream-idp).
+
+### DCR Client Name Mapping
+
+`MCP_PROXY_DCR_CLIENT_NAME_MAP` maps `client_name` values from DCR requests to upstream IdP client_ids. Pattern matching is case-insensitive; trailing `*` means prefix match, no `*` means exact match. Exact matches are checked first, then prefix matches in declaration order.
+
+**Simple format** (all clients use global `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS`):
+
+```
+MCP_PROXY_DCR_CLIENT_NAME_MAP={"Cursor":"cursor-sso-client","Claude Code*":"claude-sso-client","VS Code*":"vscode-sso-client"}
+```
+
+**Extended format** (per-client redirect URI enforcement — recommended):
+
+```
+MCP_PROXY_DCR_CLIENT_NAME_MAP={
+  "Cursor": {
+    "client_id": "cursor-sso-client",
+    "allowed_redirect_uris": "cursor://anysphere.cursor-mcp/*"
+  },
+  "Claude Code*": {
+    "client_id": "claude-sso-client",
+    "allowed_redirect_uris": "http://localhost:*,http://127.0.0.1:*"
+  },
+  "VS Code*": "vscode-sso-client"
+}
+```
+
+When `allowed_redirect_uris` is set, these patterns are enforced at `/authorize` and `/token` time for that specific upstream client_id (instead of the global `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS`). Redirect URIs are **not** validated at DCR time — the adapter is stateless and clients may register multiple URIs for different environments.
+
+#### Known MCP client `client_name` values
+
+Common `client_name` values sent in DCR requests — non-authoritative hints sourced from client source code and issue trackers, please verify at deployment time:
+
+| `client_name` pattern | Recommended map key | MCP Client | Source |
+|---|---|---|---|
+| `Cursor` | `Cursor` | Cursor IDE | [cursor/cursor#3734](https://github.com/cursor/cursor/issues/3734) |
+| `Claude Code (<serverName>)` | `Claude Code*` | Claude Code CLI | [anthropics/claude-code#59445](https://github.com/anthropics/claude-code/issues/59445) |
+| `Claude` | `Claude` | Claude.ai, Claude Desktop | [anthropics/claude-code#30511](https://github.com/anthropics/claude-code/issues/30511) |
+| `Visual Studio Code` | `Visual Studio Code` | VS Code | [modelcontextprotocol/python-sdk#1379](https://github.com/modelcontextprotocol/python-sdk/issues/1379) |
+| `Codex` | `Codex` | Codex CLI / Codex App | [openai/codex#24103](https://github.com/openai/codex/issues/24103) |
+| `Warp` | `Warp` | Warp | [warpdotdev/Warp#8356](https://github.com/warpdotdev/Warp/issues/8356) |
+| `Gemini CLI MCP Client` | `Gemini CLI*` | Gemini CLI | [source code](https://github.com/google-gemini/gemini-cli/blob/3a224d49/packages/core/src/mcp/oauth-provider.ts) |
+| `Cline` | `Cline` | Cline | [source code](https://github.com/cline/cline/blob/8a6441fd/sdk/packages/core/src/extensions/mcp/oauth.ts) |
+| `MCP Inspector` | `MCP Inspector` | MCP Inspector | [observed DCR requests](https://github.com/jdutton/mcp-typescript-simple/issues/34) |
+
+Some clients (ChatGPT, Goose, Windsurf, Amazon Q CLI, Zed) could not be verified — check the `clientName` field in [access logs](#access-logs) (enabled by default). Clients that prefer CIMD (e.g. Goose) fall back to DCR when the server doesn't advertise CIMD support.
+
+Unmatched client names fall back to `MCP_PROXY_DCR_CLIENT_ID`. If neither matches nor fallback exists, the request is rejected with `invalid_client_metadata`.
+
+**Security notes:**
+
+- `client_name` is self-asserted and spoofable. The mapping provides **operational isolation** (different consent screens, audit trails, per-client IdP policies) but does not authenticate the calling application. The per-client `allowed_redirect_uris` at `/authorize` time are the real security layer: even if an attacker spoofs `client_name`, they can only redirect to the operator-configured patterns for that client_id.
+- The fallback `MCP_PROXY_DCR_CLIENT_ID` uses the global `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS`. An attacker can omit `client_name` to get the fallback with its broader allowlist. For strict isolation, either omit `MCP_PROXY_DCR_CLIENT_ID` or narrow the global allowlist.
+- Degenerate pattern keys (`*`, empty, whitespace-only) are rejected at config startup.
+- Startup error if a mapped entry with `allowed_redirect_uris` has the same `client_id` as `MCP_PROXY_DCR_CLIENT_ID` — this prevents unintended per-client redirect restrictions on fallback users.
 
 ## RFC 9207 iss parameter validation
 
@@ -260,6 +322,8 @@ The adapter does not validate or inspect ID-JAG assertions — that is the upstr
 
 ## CIMD Adapter (EXPERIMENTAL)
 
+> For the shared concept of mapping MCP clients to upstream IdP clients, see [Per-MCP-Client IdP Client Mapping](#per-mcp-client-idp-client-mapping). This section covers CIMD-specific details.
+
 > **Status**: Based on [`draft-ietf-oauth-client-id-metadata-document-01`](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) (March 2026), an IETF Internet-Draft not yet at RFC status. This implementation may change as the spec evolves.
 
 When configured, the adapter bridges MCP clients using CIMD-style `client_id` (HTTPS URLs) to upstream IdPs that don't support CIMD natively:
@@ -285,8 +349,6 @@ MCP_PROXY_CIMD_DEFAULT_CLIENT_ID=generic-mcp-client
 - Ensure `token_endpoint_auth_methods_supported` includes `"none"`
 
 **Upstream IdP client registration**: Each upstream client_id in `MCP_PROXY_CIMD_MAP` must be pre-registered at the upstream IdP as a public client (`token_endpoint_auth_method: none`). For redirect URI configuration, see [Redirect URIs at the upstream IdP](#redirect-uris-at-the-upstream-idp).
-
-**Why configure separate upstream clients per MCP client?** Dedicated upstream clients per CIMD URL enable distinct consent screens (e.g. "Cursor IDE" vs "Claude Code"), letting users make informed decisions and administrators revoke access per MCP client independently.
 
 ### CIMD Security Considerations
 
@@ -357,7 +419,7 @@ Some MCP clients (e.g. Claude Code, Cursor IDE) unconditionally add `offline_acc
 
 ### Upstream IdP Client Registration
 
-Every `client_id` used by this adapter (both the DCR client and each CIMD-mapped client) must be pre-registered at the upstream IdP with the following settings:
+Every `client_id` used by this adapter must be pre-registered at the upstream IdP with the following settings. This includes: `MCP_PROXY_DCR_CLIENT_ID` (default DCR client), all mapped client_ids from `MCP_PROXY_DCR_CLIENT_NAME_MAP`, and all CIMD-mapped client_ids from `MCP_PROXY_CIMD_MAP`.
 
 | Setting | Value | Reason |
 |---|---|---|
@@ -385,7 +447,8 @@ The adapter validates the MCP client's `redirect_uri` before the user ever reach
 
 | Client type | Validated against | Configuration |
 |---|---|---|
-| DCR clients (non-CIMD) | `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` patterns | Set to [known MCP client patterns](#known-mcp-client-redirect-uri-patterns) below |
+| DCR clients (with per-client map) | `allowed_redirect_uris` from `MCP_PROXY_DCR_CLIENT_NAME_MAP` | Per-entry config |
+| DCR clients (without per-client map) | `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` patterns | Set to [known MCP client patterns](#known-mcp-client-redirect-uri-patterns) below |
 | CIMD clients | `redirect_uris` field in the client's CIMD metadata document | Automatic, no adapter config needed |
 
 #### Known MCP client redirect URI patterns
@@ -508,7 +571,7 @@ ts="2026-07-02T14:05:02.000Z" level="info" msg="DCR register request" method="PO
 | `/authorize` | `scope`, `clientId`, `redirectUri`, `responseType`, `codeChallengeMethod`, `statePresent`, `resource` |
 | `/authorize/callback` | `code_present`, `error`, `iss` |
 | `/token` | `clientId`, `grantType`, `redirectUri`, `hasAuthHeader`, `resource` |
-| `/register` | `clientName`, `softwareId`, `scope`, `grantTypes`, `redirectUriCount` |
+| `/register` | `clientName`, `softwareId`, `scope`, `grantTypes`, `redirectUriCount`, `idpClient`, `matchedMapping` |
 | `/.well-known/*` | _(common fields only)_ |
 
 The `userAgent` field is the primary mechanism for identifying which MCP client is making a request. Known User-Agent values include `claude-code/<version> (cli)`, `Cursor`, `mcp-sdk-ts/<version>`, and `codex-mcp-client/<version>`. The DCR endpoint additionally logs `clientName` and `softwareId` from the registration metadata (RFC 7591).
@@ -536,20 +599,21 @@ Compatible with:
 | `mcp_auth_cimd_cache_operations_total` | counter | `result` | CIMD cache lookups (`hit` / `miss`); only when CIMD is enabled |
 | `mcp_auth_cimd_cache_evictions_total` | counter | -- | CIMD cache evictions |
 | `mcp_auth_cimd_cache_size` | gauge | -- | Current CIMD cache entry count |
-| `mcp_auth_request_rejected_total` | counter | `route`, `reason`, `grant_type` (token only), `resource` (when allowlist configured) | Requests rejected by input validation |
-| `mcp_auth_authorize_redirects_total` | counter | `resource` (when allowlist configured) | Successful authorize redirects to upstream |
-| `mcp_auth_token_proxy_upstream_duration_seconds` | histogram | `grant_type`, `resource` (when allowlist configured) | Token proxy upstream request duration; only when token proxy is active |
-| `mcp_auth_token_proxy_upstream_status_total` | counter | `status`, `grant_type`, `resource` (when allowlist configured) | Token proxy upstream response status codes |
+| `mcp_auth_request_rejected_total` | counter | `route`, `reason`, `grant_type` (token only), `resource` (when allowlist configured), `idp_client` (when known) | Requests rejected by input validation |
+| `mcp_auth_authorize_redirects_total` | counter | `resource` (when allowlist configured), `idp_client` (when known) | Successful authorize redirects to upstream |
+| `mcp_auth_token_proxy_upstream_duration_seconds` | histogram | `grant_type`, `resource` (when allowlist configured), `idp_client` (when known) | Token proxy upstream request duration; only when token proxy is active |
+| `mcp_auth_token_proxy_upstream_status_total` | counter | `status`, `grant_type`, `resource` (when allowlist configured), `idp_client` (when known) | Token proxy upstream response status codes |
+| `mcp_auth_dcr_registrations_total` | counter | `idp_client`, `match_type` | Successful DCR registrations; only when `MCP_PROXY_DCR_CLIENT_NAME_MAP` is configured |
 | `process_uptime_seconds` | gauge | -- | Process uptime |
 | `process_resident_memory_bytes` | gauge | -- | Resident memory size |
 | `process_heap_used_bytes` | gauge | -- | V8 heap used |
 | `nodejs_eventloop_lag_seconds` | gauge | -- | Event loop lag (mean) |
 
-**Label notes:** The `resource` label uses the **matched allowlist pattern** (not the raw URI) to ensure bounded cardinality. It is only present when `MCP_PROXY_AUTH_ALLOWED_RESOURCES` is configured; otherwise it is omitted entirely. The `grant_type` label only appears for recognized grant types (`authorization_code`, `refresh_token`, `client_credentials`, `jwt_bearer`); unrecognized values are omitted to prevent cardinality attacks.
+**Label notes:** The `resource` label uses the **matched allowlist pattern** (not the raw URI) to ensure bounded cardinality. It is only present when `MCP_PROXY_AUTH_ALLOWED_RESOURCES` is configured; otherwise it is omitted entirely. The `grant_type` label only appears for recognized grant types (`authorization_code`, `refresh_token`, `client_credentials`, `jwt_bearer`); unrecognized values are omitted to prevent cardinality attacks. The `idp_client` label identifies the upstream IdP client_id for the request; it is bounded by the config-time `knownIdpClients` set (from DCR map, CIMD map, and fallback client_ids) and omitted for unknown client_ids. The `match_type` label on `mcp_auth_dcr_registrations_total` is one of `exact`, `prefix`, or `default`.
 
 ### Instrumentation scope
 
-Only functional endpoints are instrumented: `/.well-known/*`, `/register`, `/authorize`, `/authorize/callback`, `/token`. Health probes (`/health/*`), the `/metrics` endpoint itself, and unmatched paths are **not** tracked. All label values come from a small, fixed set (HTTP methods, known route patterns, status codes) — no unbounded cardinality growth.
+Only functional endpoints are instrumented: `/.well-known/*`, `/register`, `/authorize`, `/authorize/callback`, `/token`. Health probes (`/health/*`), the `/metrics` endpoint itself, and unmatched paths are **not** tracked. All label values come from a small, fixed set (HTTP methods, known route patterns, status codes, config-time client_ids) — no unbounded cardinality growth. The `mcp_auth_dcr_registrations_total` counter is only active when `MCP_PROXY_DCR_CLIENT_NAME_MAP` is configured.
 
 ### Scraping configuration
 
