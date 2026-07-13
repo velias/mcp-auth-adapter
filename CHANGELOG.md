@@ -5,6 +5,26 @@ This file is auto-generated from [GitHub Releases](https://github.com/velias/mcp
 
 ---
 
+## [v2.3.0](https://github.com/velias/mcp-auth-adapter/releases/tag/v2.3.0) — 2026-07-13
+
+### Features
+* DCR Client Name to IdP Client Mapping by @velias in https://github.com/velias/mcp-auth-adapter/pull/48
+* Composite health check added by @velias in https://github.com/velias/mcp-auth-adapter/pull/49
+### Other Changes
+* Bump github/codeql-action/upload-sarif from 4.36.3 to 4.37.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/44
+* Bump docker/login-action from 4.3.0 to 4.4.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/45
+* Bump docker/metadata-action from 6.1.0 to 6.2.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/46
+* Bump the dev-dependencies group across 1 directory with 5 updates by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/50
+
+
+**Full Changelog**: https://github.com/velias/mcp-auth-adapter/compare/v2.2.1...v2.3.0
+
+## Deployment notes
+* If you have Prometheus dashboards or alerts referencing `mcp_auth_*` metrics, review them for the new `idp_client` label dimension. 
+* The new `/health` endpoint should be blocked from public internet access.
+
+---
+
 ## [v2.2.1](https://github.com/velias/mcp-auth-adapter/releases/tag/v2.2.1) — 2026-07-03
 
 ### Features
