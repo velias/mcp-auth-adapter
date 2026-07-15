@@ -194,6 +194,7 @@ Common `client_name` values sent in DCR requests — non-authoritative hints sou
 | `Gemini CLI MCP Client` | `Gemini CLI*` | Gemini CLI | [source code](https://github.com/google-gemini/gemini-cli/blob/3a224d49/packages/core/src/mcp/oauth-provider.ts) |
 | `Cline` | `Cline` | Cline | [source code](https://github.com/cline/cline/blob/8a6441fd/sdk/packages/core/src/extensions/mcp/oauth.ts) |
 | `MCP Inspector` | `MCP Inspector` | MCP Inspector | [observed DCR requests](https://github.com/jdutton/mcp-typescript-simple/issues/34) |
+| `MCPJam - <serverName>` | `MCP Jam -*` | [Hosted MCP Jam](https://app.mcpjam.com/) | observer DCR request |
 
 Some clients (ChatGPT, Goose, Windsurf, Amazon Q CLI, Zed) could not be verified — check the `clientName` field in [access logs](#access-logs) (enabled by default). Clients that prefer CIMD (e.g. Goose) fall back to DCR when the server doesn't advertise CIMD support.
 
@@ -468,6 +469,7 @@ Common MCP client redirect URIs — non-authoritative hints, please verify at de
 | `https://vscode.dev/*` | VS Code (web) |
 | `warp://mcp/*` | Warp |
 | `vscode://saoudrizwan.claude-dev/*` | Cline |
+| `https://app.mcpjam.com/oauth/callback` | [MCPJam (web)](https://app.mcpjam.com/servers) |
 
 Note: MCP clients on localhost/127.0.0.1 use ephemeral ports and varying paths, so your IdP must allow any port and any path for these origins (i.e. use wildcard or prefix matching).
 
