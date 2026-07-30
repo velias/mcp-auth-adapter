@@ -9,7 +9,7 @@ import { IMetricsRegistry, ICounter, IHistogram } from '../metrics';
 const ROUTE = '/token';
 const TOKEN_UPSTREAM_TIMEOUT_MS = 10000;
 const TOKEN_UPSTREAM_MAX_RESPONSE_BYTES = 64 * 1024;
-const RELAY_HEADERS = ['content-type', 'cache-control', 'pragma'];
+const RELAY_HEADERS = ['content-type', 'cache-control', 'pragma', 'dpop-nonce'];
 
 const GRANT_TYPE_LABELS: Record<string, string> = {
   'authorization_code': 'authorization_code',
@@ -85,6 +85,7 @@ async function handleTokenRequest(
       grantType,
       redirectUri: redirectUri ? redirectUri.split('?')[0].slice(0, 200) : undefined,
       hasAuthHeader: !!req.get('authorization'),
+      hasDpopHeader: !!req.get('dpop'),
       resource: resource || 'MISSING',
     });
 
@@ -243,6 +244,17 @@ async function handleTokenRequest(
       if (authHeader) {
         outHeaders['Authorization'] = authHeader;
       }
+    }
+    // Forward DPoP proof / nonce headers for all clients (including CIMD). Unlike
+    // Authorization, DPoP proves client key possession and must survive client_id
+    // substitution. Always forwarded when present — independent of discovery ads.
+    const dpopHeader = req.get('dpop');
+    if (dpopHeader) {
+      outHeaders['DPoP'] = dpopHeader;
+    }
+    const dpopNonceHeader = req.get('dpop-nonce');
+    if (dpopNonceHeader) {
+      outHeaders['DPoP-Nonce'] = dpopNonceHeader;
     }
 
     let upstreamResponse: globalThis.Response;

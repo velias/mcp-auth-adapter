@@ -50,8 +50,9 @@ issue tokens — all real auth/token work stays on the upstream IdP.
   extension). RFC 8707 `resource` parameter validation is applied to all grant
   types except `refresh_token`. Forwards the `Authorization` header to upstream
   for non-CIMD requests (supports `client_secret_basic` per RFC 6749 §2.3.1;
-  skipped for CIMD because client_id is rewritten). Always active when the
-  authorize proxy is active.
+  skipped for CIMD because client_id is rewritten). Always forwards `DPoP` /
+  `DPoP-Nonce` request headers and relays `DPoP-Nonce` responses. Always active
+  when the authorize proxy is active.
 - **CIMD adapter** (EXPERIMENTAL) — Accepts CIMD-style `client_id` URLs from
   MCP clients, validates metadata documents, maps them to upstream IdP
   client_ids, and proxies `/authorize` and `/token` with client_id substitution.
@@ -121,8 +122,10 @@ test/
   mounted after compression (responses can be large) but before body parsers.
 - **No explicit feature flags.** All optional features (DCR, authorize proxy,
   CIMD) auto-enable based on the presence of their configuration — see
-  "Key responsibilities" above. Exception: `MCP_METRICS_ENABLED` (default
-  `true`) explicitly controls the metrics subsystem.
+  "Key responsibilities" above. Exceptions: `MCP_METRICS_ENABLED` (default
+  `true`) controls the metrics subsystem; `MCP_PROXY_DPOP_ENABLED` (default
+  `false`) controls advertising upstream DPoP metadata in well-known
+  (header forwarding on `/token` is always on).
 - **`UpstreamState`** holds the cached well-known document (already
   filtered/merged for clients) plus its pre-serialized JSON string (served
   directly by the well-known handler without per-request `JSON.stringify`),
@@ -243,6 +246,10 @@ patterns — trailing `*` = path prefix match, `*.domain.com` = domain wildcard
 matching domain and all subdomains, e.g. `https://*.corp.example.com/*`).
 
 Observability: `MCP_METRICS_ENABLED`, `MCP_ACCESS_LOG`.
+
+DPoP: `MCP_PROXY_DPOP_ENABLED` (default `false`) — when true, advertise
+upstream `dpop_signing_alg_values_supported` in well-known; header forwarding
+on `/token` is always on.
 
 Lifecycle: `MCP_SHUTDOWN_TIMEOUT_SECONDS`.
 

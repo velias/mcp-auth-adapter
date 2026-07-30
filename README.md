@@ -126,6 +126,8 @@ Environment variables are used. All variables are prefixed with `MCP_`. A `.env`
 | | | | **Resource Parameter Validation (RFC 8707)** |
 | `MCP_PROXY_AUTH_REQUIRE_RESOURCE` | No | `false` | Reject `/authorize` and `/token` requests missing the RFC 8707 `resource` parameter. Enable for strict MCP spec compliance; leave disabled if MCP clients don't yet include it. |
 | `MCP_PROXY_AUTH_ALLOWED_RESOURCES` | No | -- | Comma-separated allowed resource URI patterns. Trailing `*` = prefix match, `*.domain.com` = domain wildcard (matches domain and all subdomains), no `*` = exact match. When set, `resource` must match a pattern; unmatched values are rejected with 400. |
+| | | | **DPoP (RFC 9449)** |
+| `MCP_PROXY_DPOP_ENABLED` | No | `false` | When `true`, advertise upstream `dpop_signing_alg_values_supported` in discovery only if the Upstream IdP announces it. Off by default — see [DPoP](#dpop-rfc-9449). |
 | | | | **Observability** |
 | `MCP_ACCESS_LOG` | No | `true` | Emit per-request access logs at `info` level with client identification (User-Agent, method, path, IP, plus route-specific fields). Set to `false` to disable. |
 | `MCP_METRICS_ENABLED` | No | `true` | Enable Prometheus metrics endpoint (`GET /metrics`) and request instrumentation. Set to `false` to disable (zero overhead). |
@@ -312,6 +314,15 @@ When the adapter proxies this assertion to the upstream IdP, the upstream valida
 - Couples the client to the deployment's internal architecture
 
 This limitation is inherent to proxying JWT assertions and does not affect the client secrets flow.
+
+## DPoP (RFC 9449)
+
+DPoP is **not** required by MCP spec today and not used by any MCP Client. The adapter still prepares for optional IdP DPoP:
+
+- **`/token` always forwards** `DPoP` and `DPoP-Nonce` request headers and relays `DPoP-Nonce` on responses.
+- **Discovery is off by default** (`MCP_PROXY_DPOP_ENABLED=false`): even if the Upstream IdP advertises `dpop_signing_alg_values_supported`, the adapter omits it so DPoP-capable clients keep using bearer tokens through this facade, until it is clear that DPoP really works end to end.
+
+Set `MCP_PROXY_DPOP_ENABLED=true` only when end-to-end DPoP works. That requires the Upstream IdP to support DPoP at the token endpoint **and** accept proofs whose `htu` is this adapter’s public `token_endpoint` (`{MCP_BASE_URL}/token`), not only the IdP’s own token URL. No major IdP ships that alternate-`htu` support today. Without it, MCP clients trying to use DPoP would fail on IdP `htu` checks and whole MCP authentication would fail.
 
 ## Enterprise-Managed Authorization Passthrough
 

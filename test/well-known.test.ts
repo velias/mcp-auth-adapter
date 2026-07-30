@@ -52,6 +52,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     cimdCacheMinutes: 30,
     cimdEnabled: false,
     metricsEnabled: false,
+    dpopEnabled: false,
     shutdownTimeoutSeconds: 30,
     authStateSecret: TEST_STATE_SECRET,
     authStateTtlSeconds: 1800,
@@ -206,6 +207,38 @@ describe('Well-Known Discovery Endpoints', () => {
       expect(res.body.pushed_authorization_request_endpoint).toBeUndefined();
       expect(res.body.mtls_endpoint_aliases).toBeUndefined();
       expect(res.body.tls_client_certificate_bound_access_tokens).toBeUndefined();
+    });
+
+    it('omits upstream dpop_signing_alg_values_supported when dpopEnabled is false (default)', async () => {
+      const upstream = {
+        ...MOCK_UPSTREAM_DOC,
+        dpop_signing_alg_values_supported: ['ES256', 'RS256'],
+      };
+      const app = makeApp(makeConfig({ dpopEnabled: false }), upstream);
+
+      const res = await request(app).get('/.well-known/openid-configuration');
+
+      expect(res.body.dpop_signing_alg_values_supported).toBeUndefined();
+    });
+
+    it('passes through dpop_signing_alg_values_supported when dpopEnabled is true', async () => {
+      const upstream = {
+        ...MOCK_UPSTREAM_DOC,
+        dpop_signing_alg_values_supported: ['ES256', 'RS256'],
+      };
+      const app = makeApp(makeConfig({ dpopEnabled: true }), upstream);
+
+      const res = await request(app).get('/.well-known/openid-configuration');
+
+      expect(res.body.dpop_signing_alg_values_supported).toEqual(['ES256', 'RS256']);
+    });
+
+    it('does not invent dpop_signing_alg_values_supported when dpopEnabled but upstream omits it', async () => {
+      const app = makeApp(makeConfig({ dpopEnabled: true }));
+
+      const res = await request(app).get('/.well-known/openid-configuration');
+
+      expect(res.body.dpop_signing_alg_values_supported).toBeUndefined();
     });
   });
 

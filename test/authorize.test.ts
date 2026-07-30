@@ -30,6 +30,7 @@ const CONFIG: AppConfig = {
   cimdCacheMinutes: 30,
   cimdEnabled: false,
   metricsEnabled: false,
+  dpopEnabled: false,
   shutdownTimeoutSeconds: 30,
   authStateSecret: TEST_STATE_SECRET,
   authStateTtlSeconds: 1800,

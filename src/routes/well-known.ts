@@ -57,6 +57,11 @@ const UPSTREAM_WHITELIST_FIELDS = [
   'authorization_response_iss_parameter_supported',
 ];
 
+/** Upstream DPoP metadata fields — only included when MCP_PROXY_DPOP_ENABLED is true. */
+const DPOP_WHITELIST_FIELDS = [
+  'dpop_signing_alg_values_supported',
+];
+
 export function buildWellKnownDocument(
   upstreamDoc: Record<string, unknown>,
   config: AppConfig,
@@ -66,6 +71,16 @@ export function buildWellKnownDocument(
   for (const field of UPSTREAM_WHITELIST_FIELDS) {
     if (upstreamDoc[field] !== undefined) {
       doc[field] = upstreamDoc[field];
+    }
+  }
+
+  // Advertise DPoP only when explicitly enabled — echoing upstream dpop_* while
+  // the facade cannot satisfy proof htu would push clients into failing token calls.
+  if (config.dpopEnabled) {
+    for (const field of DPOP_WHITELIST_FIELDS) {
+      if (upstreamDoc[field] !== undefined) {
+        doc[field] = upstreamDoc[field];
+      }
     }
   }
 

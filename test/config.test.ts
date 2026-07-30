@@ -222,6 +222,29 @@ describe('loadConfig — access log', () => {
 });
 
 // ---------------------------------------------------------------------------
+// DPoP discovery (MCP_PROXY_DPOP_ENABLED)
+// ---------------------------------------------------------------------------
+describe('loadConfig — DPoP enabled', () => {
+  it('defaults to false when unset', () => {
+    withEnv({}, () => {
+      expect(loadConfig().dpopEnabled).toBe(false);
+    });
+  });
+
+  it.each(['true', 'TRUE', 'True'])('MCP_PROXY_DPOP_ENABLED="%s" → dpopEnabled=true', (val) => {
+    withEnv({ MCP_PROXY_DPOP_ENABLED: val }, () => {
+      expect(loadConfig().dpopEnabled).toBe(true);
+    });
+  });
+
+  it.each(['false', 'FALSE', '0', 'anything'])('MCP_PROXY_DPOP_ENABLED="%s" → dpopEnabled=false', (val) => {
+    withEnv({ MCP_PROXY_DPOP_ENABLED: val }, () => {
+      expect(loadConfig().dpopEnabled).toBe(false);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Scopes env vars
 // ---------------------------------------------------------------------------
 describe('loadConfig — scopes env vars', () => {
