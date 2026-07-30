@@ -27,6 +27,7 @@ export interface AppConfig {
   cimdEnabled: boolean;
   accessLog: boolean;
   metricsEnabled: boolean;
+  dpopEnabled: boolean;
   shutdownTimeoutSeconds: number;
   authStateSecret?: Buffer;
   authStateSecretPrevious?: Buffer;
@@ -418,6 +419,7 @@ export function loadConfig(): AppConfig {
     cimdEnabled,
     accessLog: parseBoolEnv('MCP_ACCESS_LOG', true),
     metricsEnabled: parseBoolEnv('MCP_METRICS_ENABLED', true),
+    dpopEnabled: parseBoolEnv('MCP_PROXY_DPOP_ENABLED', false),
     shutdownTimeoutSeconds: parseIntEnv('MCP_SHUTDOWN_TIMEOUT_SECONDS', 30),
     authStateSecret,
     authStateSecretPrevious,

@@ -203,6 +203,7 @@ describe('POST /token (Token Proxy)', () => {
         'content-type': 'application/json',
         'cache-control': 'no-store',
         'pragma': 'no-cache',
+        'dpop-nonce': 'upstream-nonce-abc',
         'server': 'Keycloak/22.0',
         'x-powered-by': 'WildFly',
         'x-internal-trace': 'abc123',
@@ -217,6 +218,7 @@ describe('POST /token (Token Proxy)', () => {
 
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.headers['pragma']).toBe('no-cache');
+    expect(res.headers['dpop-nonce']).toBe('upstream-nonce-abc');
     expect(res.headers['server']).toBeUndefined();
     expect(res.headers['x-powered-by']).toBeUndefined();
     expect(res.headers['x-internal-trace']).toBeUndefined();
@@ -673,6 +675,92 @@ describe('POST /token (Token Proxy)', () => {
       expect(res.status).toBe(200);
       const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
       expect(fetchCall[1].headers['Authorization']).toBeUndefined();
+    });
+  });
+
+  describe('DPoP header forwarding', () => {
+    it('forwards DPoP header for non-CIMD client', async () => {
+      mockUpstreamTokenResponse({ body: { access_token: 'dpop_tok', token_type: 'DPoP' } });
+      const app = createTestApp();
+      const dpopProof = 'eyJhbGciOiJFUzI1NiJ9.eyJodHUiOiJodHRwczovL2FkYXB0ZXIvdG9rZW4ifQ.sig';
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .set('DPoP', dpopProof)
+        .send({
+          grant_type: 'client_credentials',
+          client_id: 'my-service',
+          client_secret: 's3cr3t',
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
+      expect(fetchCall[1].headers['DPoP']).toBe(dpopProof);
+    });
+
+    it('forwards DPoP and DPoP-Nonce request headers together', async () => {
+      mockUpstreamTokenResponse();
+      const app = createTestApp();
+      const dpopProof = 'eyJhbGciOiJFUzI1NiJ9.eyJub25jZSI6ImFiYyJ9.sig';
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .set('DPoP', dpopProof)
+        .set('DPoP-Nonce', 'nonce-from-client')
+        .send({
+          grant_type: 'client_credentials',
+          client_id: 'my-service',
+          client_secret: 's3cr3t',
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
+      expect(fetchCall[1].headers['DPoP']).toBe(dpopProof);
+      expect(fetchCall[1].headers['DPoP-Nonce']).toBe('nonce-from-client');
+    });
+
+    it('forwards DPoP for CIMD client_id while not forwarding Authorization', async () => {
+      mockUpstreamTokenResponse({ body: { access_token: 'cimd_dpop', token_type: 'DPoP' } });
+      const app = createTestApp({ defaultClientId: 'generic-client' });
+      const basicAuth = 'Basic ' + Buffer.from('fake:creds').toString('base64');
+      const dpopProof = 'eyJhbGciOiJFUzI1NiJ9.eyJodHUiOiJodHRwczovL2FkYXB0ZXIvdG9rZW4ifQ.sig';
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .set('Authorization', basicAuth)
+        .set('DPoP', dpopProof)
+        .send({
+          grant_type: 'client_credentials',
+          client_id: 'https://cursor.com/oauth-client.json',
+          scope: 'read',
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
+      expect(fetchCall[1].headers['Authorization']).toBeUndefined();
+      expect(fetchCall[1].headers['DPoP']).toBe(dpopProof);
+    });
+
+    it('does not set DPoP on upstream fetch when client omits it', async () => {
+      mockUpstreamTokenResponse();
+      const app = createTestApp();
+
+      const res = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'client_credentials',
+          client_id: 'my-service',
+          client_secret: 's3cr3t',
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
+      expect(fetchCall[1].headers['DPoP']).toBeUndefined();
+      expect(fetchCall[1].headers['DPoP-Nonce']).toBeUndefined();
     });
   });
 

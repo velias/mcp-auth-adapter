@@ -187,6 +187,7 @@ const BASE_CONFIG: AppConfig = {
   cimdCacheMinutes: 30,
   cimdEnabled: false,
   metricsEnabled: true,
+  dpopEnabled: false,
   shutdownTimeoutSeconds: 30,
   authStateTtlSeconds: 1800,
   allowedRedirectUris: ['http://localhost:*'],
