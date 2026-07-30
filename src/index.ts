@@ -137,6 +137,12 @@ async function main(): Promise<void> {
   const refreshMs = config.wellKnownRefreshMinutes * 60 * 1000;
   const refreshTimer = setInterval(doRefresh, refreshMs);
 
+  const upstreamParEndpoint =
+    typeof upstreamDoc.pushed_authorization_request_endpoint === 'string'
+      ? upstreamDoc.pushed_authorization_request_endpoint
+      : '';
+  const parProxyEnabled = config.proxyAuthEndpoint && !!upstreamParEndpoint;
+
   const server = app.listen(config.port, () => {
     log.info('MCP Auth Adapter started', {
       port: config.port,
@@ -145,6 +151,8 @@ async function main(): Promise<void> {
       authProxy: config.proxyAuthEndpoint ? 'enabled' : 'disabled',
       issInterception: config.proxyAuthEndpoint ? 'enabled' : 'disabled',
       tokenProxy: config.proxyAuthEndpoint ? 'enabled' : 'disabled',
+      parProxy: parProxyEnabled ? 'enabled' : 'disabled',
+      dpopEnabled: config.dpopEnabled ? 'enabled' : 'disabled',
       dcrProxy: config.proxyDcrEndpoint ? 'enabled' : 'disabled',
       dcrClientNameMap: config.dcrClientNameMap.length > 0 ? `${config.dcrClientNameMap.length} entries` : 'disabled',
       dcrPerClientRedirectUris: config.dcrClientIdRedirectMap.size > 0 ? `${config.dcrClientIdRedirectMap.size} client_ids` : 'disabled',

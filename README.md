@@ -23,10 +23,12 @@ MCP servers [announce this adapter as their authorization server](https://modelc
 
 - **Well-known discovery** - filtered, MCP-focused view of the upstream IdP metadata with injected adapter endpoints and tailored configurations. See [Upstream Well-Known Handling](#upstream-well-known-handling).
 - **Open Dynamic Client Registration (DCR)** (optional) - returns a pre-configured `client_id` for registering MCP clients per [RFC 7591](https://rfc-editor.org/rfc/rfc7591). Supports per-MCP-client IdP client mapping based on `client_name` with optional per-client redirect URI enforcement. See [Open DCR and its Security Limitations](#open-dcr-and-its-security-limitations) and [Per-MCP-Client IdP Client Mapping](#per-mcp-client-idp-client-mapping).
-- **Scope filtering** (optional) - intercepts authorization requests to modify scopes before redirecting to the upstream IdP.
+- **Scope filtering** (optional) - intercepts `/authorize` and `/par` requests to modify scopes before forwarding to the upstream IdP.
 - **RFC 9207 `iss` parameter validation** - mandatory authorization response issuer verification preventing OAuth mix-up attacks per the MCP Auth Spec. See [RFC 9207 iss parameter validation](#rfc-9207-iss-parameter-validation).
 - **Resource parameter validation** (optional) - validates the [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) `resource` parameter required by the MCP specification, with configurable enforcement, format checking, and allowlist filtering. See [Resource Parameter Validation (RFC 8707)](#resource-parameter-validation-rfc-8707).
 - **Client Credentials passthrough** - transparently proxies `client_credentials` and JWT bearer grants to the upstream IdP per the [MCP OAuth Client Credentials extension](https://modelcontextprotocol.io/extensions/auth/oauth-client-credentials). See [Client Credentials Passthrough](#client-credentials-passthrough).
+- **PAR proxy** (optional) - proxies [RFC 9126](https://www.rfc-editor.org/rfc/rfc9126) Pushed Authorization Requests when the authorize proxy is active and the Upstream IdP advertises PAR. See [PAR (RFC 9126)](#par-rfc-9126).
+- **DPoP header forwarding** - always forwards `DPoP` / `DPoP-Nonce` on `/token` and `/par`; discovery advertisement is opt-in. See [DPoP (RFC 9449)](#dpop-rfc-9449).
 - **CIMD adapter** (EXPERIMENTAL, optional) - accepts [Client ID Metadata Document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) style `client_id` URLs, validates metadata documents, and maps them to upstream IdP client_ids. See [CIMD Adapter](#cimd-adapter-experimental).
 
 See [Flow Diagrams](#flow-diagrams) to understand functionality better.
@@ -105,29 +107,27 @@ Environment variables are used. All variables are prefixed with `MCP_`. A `.env`
 | `MCP_UPSTREAM_SSO_URL` | Yes | -- | Base URL (issuer) of the upstream IdP. Must be `http` or `https`; trailing slashes are stripped automatically. Works with any OAuth 2.0 / OIDC provider. Discovery is attempted via `/.well-known/openid-configuration`, then `/.well-known/oauth-authorization-server` (RFC 8414); on failure, fallback endpoints are derived using Keycloak URL conventions ([see below](#upstream-well-known-handling)). |
 | `MCP_PORT` | No | `3000` | Port this app listens on. |
 | `MCP_SHUTDOWN_TIMEOUT_SECONDS` | No | `30` | Maximum seconds to wait for in-flight requests to drain after `SIGTERM`/`SIGINT` before force-exiting. |
-| | | | **Dynamic Client Registration** |
-| `MCP_PROXY_DCR_CLIENT_ID` | No | -- | Default `client_id` returned by `POST /register`. Setting this enables the DCR proxy. Must be pre-registered at the upstream IdP as a public client. When `MCP_PROXY_DCR_CLIENT_NAME_MAP` is also set, this serves as the fallback for unmatched client names. |
-| `MCP_PROXY_DCR_CLIENT_NAME_MAP` | No | -- | JSON object mapping `client_name` patterns to upstream IdP client_ids, with optional per-client redirect URI restrictions. Setting this enables the DCR proxy (even without `MCP_PROXY_DCR_CLIENT_ID`). See [Per-MCP-Client IdP Client Mapping](#per-mcp-client-idp-client-mapping). |
-| | | | **RFC 9207 iss interception** (auto-enables `/authorize` + `/token` proxy) |
+| | | | **Authorize proxy** (RFC 9207 iss interception, scopes, resource; auto-enables `/authorize` + `/token`; `/par` when upstream advertises PAR — see [PAR](#par-rfc-9126)) |
 | `MCP_PROXY_AUTH_STATE_SECRET` | Conditional | -- | Hex-encoded HMAC secret for signing state blobs (min 32 bytes = 64 hex chars). **Required when the `/authorize` proxy is active** (scope filtering, CIMD, or standalone). Generate with `openssl rand -hex 32`. Must be identical across all pods. |
 | `MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS` | No | -- | Previous HMAC secret for zero-downtime key rotation (same format). Set to the old key during rotation; remove after TTL has elapsed. |
 | `MCP_PROXY_AUTH_STATE_TTL_MINUTES` | No | `30` | How long (minutes) the signed state blob remains valid. Must cover full user interaction at the upstream IdP (login + registration + MFA + consent). |
 | `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` | Conditional | -- | Comma-separated allowed redirect URI patterns. Trailing `*` = prefix match, no `*` = exact match. **Required when `/authorize` proxy is active** (unless CIMD-only, or all `MCP_PROXY_DCR_CLIENT_NAME_MAP` entries have per-client `allowed_redirect_uris` with no fallback `MCP_PROXY_DCR_CLIENT_ID`). See [known MCP client patterns](#known-mcp-client-redirect-uri-patterns) for common values. |
-| | | | **Scope filtering** (auto-enables `/authorize` proxy) |
-| `MCP_PROXY_AUTH_SCOPES_REMOVED` | No | -- | Comma-separated scopes to strip from `/authorize` requests (e.g. `offline_access`). Ignored if `MCP_PROXY_AUTH_SCOPES_PRESERVED` is also set. |
-| `MCP_PROXY_AUTH_SCOPES_PRESERVED` | No | -- | Comma-separated scopes to keep in `/authorize` requests; all others are stripped. Takes precedence over `MCP_PROXY_AUTH_SCOPES_REMOVED`. |
-| | | | **Well-known discovery** |
-| `MCP_WELL_KNOWN_SCOPES_SUPPORTED` | No | -- | Comma-separated scopes to announce in `scopes_supported`. If empty, the field is omitted. Note: some MCP clients request all announced scopes -- this controls *announced* scopes, not *forwarded* scopes. |
-| `MCP_WELL_KNOWN_REFRESH_MINUTES` | No | `60` | How often (in minutes) to re-fetch the upstream well-known document. |
-| | | | **CIMD adapter** (EXPERIMENTAL, auto-enables `/authorize` proxy + `/token` proxy) |
+| `MCP_PROXY_AUTH_SCOPES_REMOVED` | No | -- | Comma-separated scopes to strip from `/authorize` and `/par` requests (e.g. `offline_access`). Ignored if `MCP_PROXY_AUTH_SCOPES_PRESERVED` is also set. Setting this (or scopes preserved / CIMD) auto-enables the authorize proxy. |
+| `MCP_PROXY_AUTH_SCOPES_PRESERVED` | No | -- | Comma-separated scopes to keep in `/authorize` and `/par` requests; all others are stripped. Takes precedence over `MCP_PROXY_AUTH_SCOPES_REMOVED`. |
+| `MCP_PROXY_AUTH_REQUIRE_RESOURCE` | No | `false` | Reject `/authorize`, `/par`, and `/token` requests missing the RFC 8707 `resource` parameter. Enable for strict MCP spec compliance; leave disabled if MCP clients don't yet include it. |
+| `MCP_PROXY_AUTH_ALLOWED_RESOURCES` | No | -- | Comma-separated allowed resource URI patterns. Trailing `*` = prefix match, `*.domain.com` = domain wildcard (matches domain and all subdomains), no `*` = exact match. When set, `resource` must match a pattern; unmatched values are rejected with 400. |
+| | | | **Dynamic Client Registration** |
+| `MCP_PROXY_DCR_CLIENT_ID` | No | -- | Default `client_id` returned by `POST /register`. Setting this enables the DCR proxy. Must be pre-registered at the upstream IdP as a public client. When `MCP_PROXY_DCR_CLIENT_NAME_MAP` is also set, this serves as the fallback for unmatched client names. |
+| `MCP_PROXY_DCR_CLIENT_NAME_MAP` | No | -- | JSON object mapping `client_name` patterns to upstream IdP client_ids, with optional per-client redirect URI restrictions. Setting this enables the DCR proxy (even without `MCP_PROXY_DCR_CLIENT_ID`). See [Per-MCP-Client IdP Client Mapping](#per-mcp-client-idp-client-mapping). |
+| | | | **CIMD adapter** (EXPERIMENTAL, auto-enables authorize proxy) |
 | `MCP_PROXY_CIMD_MAP` | No | -- | JSON object mapping CIMD URLs to upstream IdP client_ids. Format: `{"<cimd_url>":"<upstream_client_id>", ...}`. N:1 mapping supported. CIMD auto-enables when this is non-empty or `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID` is set. |
 | `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID` | No | -- | Fallback upstream client_id for CIMD URLs not in the map. If unset, unknown CIMD URLs are rejected with 403 (strict allowlist). |
 | `MCP_PROXY_CIMD_CACHE_MINUTES` | No | `30` | Cache TTL (in minutes) for validated CIMD metadata documents. |
-| | | | **Resource Parameter Validation (RFC 8707)** |
-| `MCP_PROXY_AUTH_REQUIRE_RESOURCE` | No | `false` | Reject `/authorize` and `/token` requests missing the RFC 8707 `resource` parameter. Enable for strict MCP spec compliance; leave disabled if MCP clients don't yet include it. |
-| `MCP_PROXY_AUTH_ALLOWED_RESOURCES` | No | -- | Comma-separated allowed resource URI patterns. Trailing `*` = prefix match, `*.domain.com` = domain wildcard (matches domain and all subdomains), no `*` = exact match. When set, `resource` must match a pattern; unmatched values are rejected with 400. |
-| | | | **DPoP (RFC 9449)** |
-| `MCP_PROXY_DPOP_ENABLED` | No | `false` | When `true`, advertise upstream `dpop_signing_alg_values_supported` in discovery only if the Upstream IdP announces it. Off by default — see [DPoP](#dpop-rfc-9449). |
+| | | | **Well-known discovery** |
+| `MCP_WELL_KNOWN_SCOPES_SUPPORTED` | No | -- | Comma-separated scopes to announce in `scopes_supported`. If empty, the field is omitted. Note: some MCP clients request all announced scopes -- this controls *announced* scopes, not *forwarded* scopes. |
+| `MCP_WELL_KNOWN_REFRESH_MINUTES` | No | `60` | How often (in minutes) to re-fetch the upstream well-known document. |
+| | | | **Protocol opt-ins** |
+| `MCP_PROXY_DPOP_ENABLED` | No | `false` | When `true`, advertise upstream `dpop_signing_alg_values_supported` in discovery only if the Upstream IdP announces it. Off by default — see [DPoP](#dpop-rfc-9449). Header forwarding on `/token` and `/par` is always on. PAR has no env flag (see authorize proxy note above). |
 | | | | **Observability** |
 | `MCP_ACCESS_LOG` | No | `true` | Emit per-request access logs at `info` level with client identification (User-Agent, method, path, IP, plus route-specific fields). Set to `false` to disable. |
 | `MCP_METRICS_ENABLED` | No | `true` | Enable Prometheus metrics endpoint (`GET /metrics`) and request instrumentation. Set to `false` to disable (zero overhead). |
@@ -179,7 +179,7 @@ MCP_PROXY_DCR_CLIENT_NAME_MAP={
 }
 ```
 
-When `allowed_redirect_uris` is set, these patterns are enforced at `/authorize` and `/token` time for that specific upstream client_id (instead of the global `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS`). Redirect URIs are **not** validated at DCR time — the adapter is stateless and clients may register multiple URIs for different environments.
+When `allowed_redirect_uris` is set, these patterns are enforced at `/authorize`, `/par`, and `/token` time for that specific upstream client_id (instead of the global `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS`). Redirect URIs are **not** validated at DCR time — the adapter is stateless and clients may register multiple URIs for different environments.
 
 #### Known MCP client `client_name` values
 
@@ -249,7 +249,7 @@ MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS=http://localhost:*,http://127.0.0.1:*
 
 ## Resource Parameter Validation (RFC 8707)
 
-[RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) defines the `resource` parameter for OAuth 2.0, binding tokens to a specific resource server audience. The MCP specification (2025-06-18+) mandates that clients include `resource` in both `/authorize` and `/token` requests to prevent confused deputy attacks.
+[RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) defines the `resource` parameter for OAuth 2.0, binding tokens to a specific resource server audience. The MCP specification (2025-06-18+) mandates that clients include `resource` in both `/authorize` and `/token` requests to prevent confused deputy attacks. The adapter applies the same validation on `/par` (when PAR is active).
 
 ### Validation layers
 
@@ -302,27 +302,37 @@ The adapter includes `client_credentials` in `grant_types_supported` in its well
 
 ### JWT Bearer Assertion `aud` Caveat
 
-When using JWT bearer assertions (RFC 7523), the client constructs a signed JWT with an `aud` (audience) claim set to the authorization server's token endpoint URL. Since MCP clients discover this adapter as the authorization server, they set `aud` to `{MCP_BASE_URL}/token`.
+When using JWT bearer assertions (RFC 7523), the client constructs a signed JWT with an `aud` (audience) claim set to the authorization server endpoint it is calling. Since MCP clients discover this adapter as the authorization server, they typically set `aud` to `{MCP_BASE_URL}/token` (token endpoint) or `{MCP_BASE_URL}/par` (PAR endpoint, when used).
 
-When the adapter proxies this assertion to the upstream IdP, the upstream validates `aud` against **its own** token endpoint URL. This mismatch causes the upstream to reject the assertion.
+When the adapter proxies this assertion to the upstream IdP, the upstream validates `aud` against **its own** endpoint URL. This mismatch causes the upstream to reject the assertion.
 
-**Workaround 1 (recommended)**: Configure the upstream IdP to accept the adapter's token endpoint URL (`{MCP_BASE_URL}/token`) as a valid audience for JWT client assertions. In Keycloak, this can be configured per-client under "Credentials > Client Authenticator > Signed JWT > Valid Audiences". Other IdPs have similar settings. This is transparent to clients — no client-side changes required.
+**Workaround 1 (recommended)**: Configure the upstream IdP to accept the adapter's public endpoint URLs (`{MCP_BASE_URL}/token` and, if confidential clients use PAR, `{MCP_BASE_URL}/par`) as valid audiences for JWT client assertions. In Keycloak, this can be configured per-client under "Credentials > Client Authenticator > Signed JWT > Valid Audiences". Other IdPs have similar settings. This is transparent to clients — no client-side changes required.
 
-**Workaround 2**: Configure the client to use the upstream IdP's token endpoint URL directly as the `aud` claim, rather than deriving it from discovery. This is valid per RFC 7523 — the upstream IdP *is* the real authorization server, the adapter is just a proxy. Limitations:
-- Requires the client to have out-of-band knowledge of the upstream IdP's token endpoint URL
-- Standard MCP SDK implementations (e.g. `PrivateKeyJwtProvider`) typically derive `aud` from the discovered `token_endpoint` automatically — overriding this requires using lower level client code
+**Workaround 2**: Configure the client to use the upstream IdP's endpoint URL directly as the `aud` claim, rather than deriving it from discovery. This is valid per RFC 7523 — the upstream IdP *is* the real authorization server, the adapter is just a proxy. Limitations:
+- Requires the client to have out-of-band knowledge of the upstream IdP's endpoint URL
+- Standard MCP SDK implementations (e.g. `PrivateKeyJwtProvider`) typically derive `aud` from the discovered `token_endpoint` (or PAR endpoint) automatically — overriding this requires using lower level client code
 - Couples the client to the deployment's internal architecture
 
-This limitation is inherent to proxying JWT assertions and does not affect the client secrets flow.
+This limitation is inherent to proxying JWT assertions and does not affect the client secrets flow. Public MCP clients with `token_endpoint_auth_method=none` are unaffected.
 
 ## DPoP (RFC 9449)
 
 DPoP is **not** required by MCP spec today and not used by any MCP Client. The adapter still prepares for optional IdP DPoP:
 
-- **`/token` always forwards** `DPoP` and `DPoP-Nonce` request headers and relays `DPoP-Nonce` on responses.
+- **`/token` and `/par` always forward** `DPoP` and `DPoP-Nonce` request headers and relay `DPoP-Nonce` on responses.
 - **Discovery is off by default** (`MCP_PROXY_DPOP_ENABLED=false`): even if the Upstream IdP advertises `dpop_signing_alg_values_supported`, the adapter omits it so DPoP-capable clients keep using bearer tokens through this facade, until it is clear that DPoP really works end to end.
 
 Set `MCP_PROXY_DPOP_ENABLED=true` only when end-to-end DPoP works. That requires the Upstream IdP to support DPoP at the token endpoint **and** accept proofs whose `htu` is this adapter’s public `token_endpoint` (`{MCP_BASE_URL}/token`), not only the IdP’s own token URL. No major IdP ships that alternate-`htu` support today. Without it, MCP clients trying to use DPoP would fail on IdP `htu` checks and whole MCP authentication would fail.
+
+## PAR (RFC 9126)
+
+Pushed Authorization Requests are **not** required by MCP today. The adapter proxies PAR when the authorize proxy is active **and** the Upstream IdP advertises `pushed_authorization_request_endpoint` (no separate env flag):
+
+1. Discovery rewrites that field to `{MCP_BASE_URL}/par` (and may pass through `require_pushed_authorization_requests` from upstream).
+2. `POST /par` applies the same transforms as `/authorize` (scopes, CIMD, redirect_uri allowlist + HMAC state wrap, resource), forwards `Authorization` / `DPoP` headers like `/token`, and returns the **upstream** `request_uri` (the IdP holds PAR state — the adapter stays stateless).
+3. `GET /authorize?client_id=&request_uri=` forwards only those two parameters (with CIMD `client_id` substitution when needed).
+
+If upstream omits PAR, the adapter omits PAR from discovery, `/par` returns 404, and `/authorize` does not take the `request_uri` shortcut. Confidential clients authenticating at PAR with JWT assertions typically set `aud` to `{MCP_BASE_URL}/par` and hit the same dual-audience consideration as `/token` (see [JWT Bearer Assertion `aud` Caveat](#jwt-bearer-assertion-aud-caveat)); public MCP clients with `none` auth are unaffected.
 
 ## Enterprise-Managed Authorization Passthrough
 
@@ -357,8 +367,10 @@ MCP_PROXY_CIMD_DEFAULT_CLIENT_ID=generic-mcp-client
 
 **When CIMD is enabled**, the well-known document is modified to:
 - Advertise `client_id_metadata_document_supported: true`
-- Rewrite `token_endpoint` to this adapter's `/token` proxy
+- Rewrite `token_endpoint` to this adapter's `/token` proxy (and `authorization_endpoint` / PAR endpoint when those proxies are active)
 - Ensure `token_endpoint_auth_methods_supported` includes `"none"`
+
+CIMD `client_id` substitution applies on `/authorize`, `/par`, and `/token`.
 
 **Upstream IdP client registration**: Each upstream client_id in `MCP_PROXY_CIMD_MAP` must be pre-registered at the upstream IdP as a public client (`token_endpoint_auth_method: none`). For redirect URI configuration, see [Redirect URIs at the upstream IdP](#redirect-uris-at-the-upstream-idp).
 
@@ -407,7 +419,7 @@ This replaces the upstream `scopes_supported` in discovery, so greedy clients on
 
 **Mitigation 2 — filter scopes at the authorize proxy:**
 
-Even if you cannot control what's announced (e.g. you need `scopes_supported` to reflect the full upstream list for other consumers), the authorize proxy can strip unwanted scopes before forwarding to the upstream IdP:
+Even if you cannot control what's announced (e.g. you need `scopes_supported` to reflect the full upstream list for other consumers), the authorize proxy can strip unwanted scopes on `/authorize` and `/par` before forwarding to the upstream IdP:
 
 ```bash
 # Remove specific problematic scopes from authorize requests
@@ -497,11 +509,11 @@ Authorization State blob verification uses absolute timestamps, so pod clocks mu
 
 ### Caching
 
-Well-known endpoints return `Cache-Control: public, max-age=<seconds>` (half of `MCP_WELL_KNOWN_REFRESH_MINUTES`). DCR, `/authorize/callback`, and `/token` return `Cache-Control: no-store`. CDNs must honor origin cache headers to ensure clients receive up-to-date discovery documents and never cache authorization responses or tokens.
+Well-known endpoints return `Cache-Control: public, max-age=<seconds>` (half of `MCP_WELL_KNOWN_REFRESH_MINUTES`). DCR and `/authorize/callback` return `Cache-Control: no-store`. `/token` and `/par` relay upstream `Cache-Control` (typically `no-store`). CDNs must honor origin cache headers to ensure clients receive up-to-date discovery documents and never cache authorization responses or tokens.
 
 ### Rate Limiting
 
-Publicly accessible endpoints that should be rate-limited: `POST /register` (open DCR, [RFC 7591 §3](https://rfc-editor.org/rfc/rfc7591#section-3)), `GET /authorize`, `GET /authorize/callback`, and `POST /token`. This adapter does not implement app-level rate limiting - use an external WAF or reverse proxy (e.g. nginx, Cloudflare, Akamai).
+Publicly accessible endpoints that should be rate-limited: `POST /register` (open DCR, [RFC 7591 §3](https://rfc-editor.org/rfc/rfc7591#section-3)), `GET /authorize`, `GET /authorize/callback`, `POST /token`, and `POST /par`. This adapter does not implement app-level rate limiting - use an external WAF or reverse proxy (e.g. nginx, Cloudflare, Akamai).
 
 ### CORS
 
@@ -519,6 +531,7 @@ The adapter serves the following paths. Your reverse proxy (Ingress, nginx, HAPr
 | `/authorize` | Public | Authorization proxy |
 | `/authorize/callback` | Public | ISS interception callback (v2.0+) |
 | `/token` | Public | Token proxy (v2.0+) |
+| `/par` | Public | PAR proxy (when auth proxy active and upstream advertises PAR) |
 | `/health` | **Internal only** | Composite health check with upstream IdP probe |
 | `/health/live`, `/health/ready` | **Internal only** | Kubernetes probes |
 | `/metrics` | **Internal only** | Prometheus scraping (if enabled) |
@@ -613,7 +626,8 @@ ts="2026-07-02T14:05:02.000Z" level="info" msg="DCR register request" method="PO
 | All routes | `method`, `path`, `ip`, `userAgent`, `status` |
 | `/authorize` | `scope`, `clientId`, `redirectUri`, `responseType`, `codeChallengeMethod`, `statePresent`, `resource` |
 | `/authorize/callback` | `code_present`, `error`, `iss` |
-| `/token` | `clientId`, `grantType`, `redirectUri`, `hasAuthHeader`, `resource` |
+| `/token` | `clientId`, `grantType`, `redirectUri`, `hasAuthHeader`, `hasDpopHeader`, `resource` |
+| `/par` | `scope`, `clientId`, `redirectUri`, `responseType`, `codeChallengeMethod`, `statePresent`, `hasAuthHeader`, `hasDpopHeader`, `resource` |
 | `/register` | `clientName`, `softwareId`, `scope`, `grantTypes`, `redirectUriCount`, `idpClient`, `matchedMapping` |
 | `/.well-known/*` | _(common fields only)_ |
 
@@ -646,6 +660,8 @@ Compatible with:
 | `mcp_auth_authorize_redirects_total` | counter | `resource` (when allowlist configured), `idp_client` (when known) | Successful authorize redirects to upstream |
 | `mcp_auth_token_proxy_upstream_duration_seconds` | histogram | `grant_type`, `resource` (when allowlist configured), `idp_client` (when known) | Token proxy upstream request duration; only when token proxy is active |
 | `mcp_auth_token_proxy_upstream_status_total` | counter | `status`, `grant_type`, `resource` (when allowlist configured), `idp_client` (when known) | Token proxy upstream response status codes |
+| `mcp_auth_par_proxy_upstream_duration_seconds` | histogram | `resource` (when allowlist configured), `idp_client` (when known) | PAR proxy upstream request duration; only when auth proxy is active |
+| `mcp_auth_par_proxy_upstream_status_total` | counter | `status`, `resource` (when allowlist configured), `idp_client` (when known) | PAR proxy upstream response status codes |
 | `mcp_auth_dcr_registrations_total` | counter | `idp_client`, `match_type` | Successful DCR registrations; only when `MCP_PROXY_DCR_CLIENT_NAME_MAP` is configured |
 | `process_uptime_seconds` | gauge | -- | Process uptime |
 | `process_resident_memory_bytes` | gauge | -- | Resident memory size |
@@ -656,7 +672,7 @@ Compatible with:
 
 ### Instrumentation scope
 
-Only functional endpoints are instrumented: `/.well-known/*`, `/register`, `/authorize`, `/authorize/callback`, `/token`. Health probes (`/health/*`), the `/metrics` endpoint itself, and unmatched paths are **not** tracked. All label values come from a small, fixed set (HTTP methods, known route patterns, status codes, config-time client_ids) — no unbounded cardinality growth. The `mcp_auth_dcr_registrations_total` counter is only active when `MCP_PROXY_DCR_CLIENT_NAME_MAP` is configured.
+Only functional endpoints are instrumented: `/.well-known/*`, `/register`, `/authorize`, `/authorize/callback`, `/token`, `/par`. Health probes (`/health/*`), the `/metrics` endpoint itself, and unmatched paths are **not** tracked. All label values come from a small, fixed set (HTTP methods, known route patterns, status codes, config-time client_ids) — no unbounded cardinality growth. The `mcp_auth_dcr_registrations_total` counter is only active when `MCP_PROXY_DCR_CLIENT_NAME_MAP` is configured.
 
 ### Scraping configuration
 
@@ -682,7 +698,7 @@ spec:
 
 The adapter fetches the upstream IdP's discovery document at startup (trying OIDC and RFC 8414 paths) but only exposes a strict whitelist of fields relevant to MCP. See [Well-Known Field Filtering](#well-known-field-filtering) for details.
 
-- **Discovery fallback chain**: The adapter tries `/.well-known/openid-configuration` first, then `/.well-known/oauth-authorization-server` (RFC 8414). If both fail, endpoints are derived from `MCP_UPSTREAM_SSO_URL` using Keycloak URL conventions (e.g. `{issuer}/protocol/openid-connect/auth`). **This last-resort fallback is Keycloak-specific** - for other IdPs the derived URLs will be incorrect. Capability fields default to safe minimums (e.g. `code_challenge_methods_supported: ["S256"]`).
+- **Discovery fallback chain**: The adapter tries `/.well-known/openid-configuration` first, then `/.well-known/oauth-authorization-server` (RFC 8414). If both fail, endpoints are derived from `MCP_UPSTREAM_SSO_URL` using Keycloak URL conventions (e.g. `{issuer}/protocol/openid-connect/auth`). **This last-resort fallback is Keycloak-specific** - for other IdPs the derived URLs will be incorrect. Capability fields default to safe MCP minimums (e.g. `code_challenge_methods_supported: ["S256"]`). Optional upstream capabilities are **not** invented in the fallback (e.g. PAR, DPoP metadata) — those appear only when a real upstream well-known announces them (and any adapter gate still applies; see [PAR](#par-rfc-9126), [DPoP](#dpop-rfc-9449)).
 - **Flow-level defaults**: When the upstream provides `authorization_endpoint` and `token_endpoint` but omits flow fields, the adapter injects: `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code", "client_credentials"]`, `code_challenge_methods_supported: ["S256"]`. Existing upstream values are never overridden.
 - **Periodic refresh**: Re-fetches at the configured interval (default: 60 min). On success, the new document is used immediately. On failure, the previous document is kept.
 - **Compatibility validation**: At startup and on each periodic refresh, the adapter validates the upstream document and logs `Upstream IdP compatibility:` warnings for:
@@ -698,6 +714,8 @@ The adapter only exposes a strict whitelist of upstream fields. New upstream fie
 
 `issuer`, `authorization_endpoint`, `token_endpoint`, `jwks_uri`, `registration_endpoint`, `scopes_supported`, `response_types_supported`, `response_modes_supported`, `grant_types_supported`, `token_endpoint_auth_methods_supported`, `token_endpoint_auth_signing_alg_values_supported`, `code_challenge_methods_supported`, `id_token_signing_alg_values_supported`, `subject_types_supported`, `claims_supported`, `introspection_endpoint`, `userinfo_endpoint`, `revocation_endpoint`, `authorization_response_iss_parameter_supported`
 
+Conditionally (when auth proxy is on and upstream announces them): `pushed_authorization_request_endpoint`, `require_pushed_authorization_requests`. Conditionally (when `MCP_PROXY_DPOP_ENABLED`): `dpop_signing_alg_values_supported`.
+
 #### Adapted fields
 
 | Field | Condition | Adaptation |
@@ -707,6 +725,7 @@ The adapter only exposes a strict whitelist of upstream fields. New upstream fie
 | `authorization_endpoint` | Auth proxy enabled | Replaced with `{MCP_BASE_URL}/authorize` |
 | `token_endpoint_auth_methods_supported` | DCR or CIMD enabled | `"none"` injected if not already present |
 | `token_endpoint` | Auth proxy enabled | Rewritten to `{MCP_BASE_URL}/token` |
+| `pushed_authorization_request_endpoint` | Auth proxy + upstream has PAR | Rewritten to `{MCP_BASE_URL}/par` |
 | `authorization_response_iss_parameter_supported` | Auth proxy enabled | Set to `true` |
 | `client_id_metadata_document_supported` | CIMD enabled | Set to `true` |
 | `scopes_supported` | `MCP_WELL_KNOWN_SCOPES_SUPPORTED` set | Replaced with configured value; omitted if empty |
@@ -716,7 +735,7 @@ The adapter only exposes a strict whitelist of upstream fields. New upstream fie
 
 #### Excluded fields
 
-Everything not in the whitelist above is automatically excluded — this includes OIDC session/logout, CIBA, device flow, PAR, JAR/JARM, mTLS, encryption, server-side auth endpoints, and misc claims fields. To expose an additional upstream field, add it to `UPSTREAM_WHITELIST_FIELDS` in [`src/routes/well-known.ts`](src/routes/well-known.ts).
+Everything not in the whitelist above is automatically excluded — this includes OIDC session/logout, CIBA, device flow, JAR/JARM, mTLS, encryption, server-side auth endpoints, and misc claims fields. To expose an additional upstream field, add it to `UPSTREAM_WHITELIST_FIELDS` in [`src/routes/well-known.ts`](src/routes/well-known.ts).
 
 ## Flow Diagrams
 

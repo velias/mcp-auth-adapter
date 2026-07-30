@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { Logger } from '../logger';
+import { Logger, truncateUriForLog } from '../logger';
 import { ICounter } from '../metrics';
 import { verifyState } from '../state-signer';
 
@@ -71,7 +71,7 @@ export function createAuthorizeCallbackRouter(
       redirectUrl = new URL(payload.redirectUri);
     } catch {
       logger.error('authorize callback: invalid redirectUri in verified state blob', {
-        uri: payload.redirectUri.slice(0, 200),
+        uri: truncateUriForLog(payload.redirectUri),
       });
       config.rejectedTotal.inc({ route: ROUTE, reason: 'redirect_uri_invalid' });
       res.status(400).json({

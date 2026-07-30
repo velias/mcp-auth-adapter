@@ -54,3 +54,16 @@ export function requestMeta(req: Request): Record<string, unknown> {
     userAgent: req.get('user-agent'),
   };
 }
+
+/**
+ * Truncates CIMD-style client_id URLs for log fields (max 80 chars).
+ * Opaque / non-URL client_ids are returned unchanged.
+ */
+export function truncateClientIdForLog(clientId: string): string {
+  return clientId.startsWith('https://') ? clientId.slice(0, 80) : clientId;
+}
+
+/** Truncates redirect_uri / resource / similar URI values for log fields (max 200 chars). */
+export function truncateUriForLog(uri: string): string {
+  return uri.length > 200 ? uri.slice(0, 200) : uri;
+}
