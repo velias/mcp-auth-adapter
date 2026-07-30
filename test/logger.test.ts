@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { createLogger } from '../src/logger';
+import { createLogger, truncateClientIdForLog, truncateUriForLog } from '../src/logger';
 
 function captureLog(method: 'log' | 'warn' | 'error', fn: () => void): string {
   const spy = vi.spyOn(console, method).mockImplementation(() => {});
@@ -114,5 +114,33 @@ describe('logger formatting', () => {
         spy.mockRestore();
       }
     });
+  });
+});
+
+describe('truncateClientIdForLog', () => {
+  it('leaves opaque client_ids unchanged', () => {
+    expect(truncateClientIdForLog('my-client')).toBe('my-client');
+  });
+
+  it('truncates https CIMD client_ids to 80 chars', () => {
+    const long = `https://example.com/${'a'.repeat(100)}`;
+    expect(truncateClientIdForLog(long)).toBe(long.slice(0, 80));
+    expect(truncateClientIdForLog(long).length).toBe(80);
+  });
+
+  it('does not truncate short https client_ids', () => {
+    expect(truncateClientIdForLog('https://example.com/client')).toBe('https://example.com/client');
+  });
+});
+
+describe('truncateUriForLog', () => {
+  it('leaves short URIs unchanged', () => {
+    expect(truncateUriForLog('https://app.example.com/callback')).toBe('https://app.example.com/callback');
+  });
+
+  it('truncates URIs longer than 200 chars', () => {
+    const long = `https://example.com/${'a'.repeat(250)}`;
+    expect(truncateUriForLog(long)).toBe(long.slice(0, 200));
+    expect(truncateUriForLog(long).length).toBe(200);
   });
 });

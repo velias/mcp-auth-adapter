@@ -1,57 +1,25 @@
 import { Router, Request, Response } from 'express';
 import { Logger } from '../logger';
-import {
-  CimdDocument,
-  isCimdClientId,
-  validateCimdUrl,
-  validateRedirectUri,
-  sanitizeForError,
-} from '../cimd';
-import { matchesRedirectPattern, checkAndMatchResource, ResourceConfig } from '../uri-validation';
 import { ICounter } from '../metrics';
-import { signState } from '../state-signer';
+import {
+  AuthScopeConfig,
+  AuthRequestTransformConfig,
+  applyAuthorizationRequestTransforms,
+  applyCimdClientIdSubstitution,
+  filterScopes,
+} from '../auth-request-transforms';
+
+export type { AuthScopeConfig };
+export { filterScopes };
 
 const ROUTE = '/authorize';
 
-export interface AuthScopeConfig {
-  removed?: string[];
-  preserved?: string[];
-  removedSet?: Set<string>;
-  preservedSet?: Set<string>;
-}
-
-export interface AuthorizeRouterConfig extends AuthScopeConfig, ResourceConfig {
+export interface AuthorizeRouterConfig extends AuthRequestTransformConfig {
   getUpstreamAuthEndpoint: () => string;
-  cimdResolve?: (cimdUrl: string) => string | null;
-  cimdValidateAndCache?: (cimdUrl: string) => Promise<CimdDocument>;
-  stateBaseUrl?: string;
-  stateSecret?: Buffer;
-  stateTtlSeconds?: number;
-  stateAllowedRedirectUris?: string[];
-  dcrClientIdRedirectMap?: Map<string, string[]>;
-  knownIdpClients?: Set<string>;
+  /** Upstream PAR endpoint when present; empty/undefined disables request_uri passthrough. */
+  getUpstreamParEndpoint?: () => string;
   rejectedTotal: ICounter;
   redirectsTotal: ICounter;
-}
-
-export function filterScopes(
-  scopeParam: string,
-  scopeConfig: AuthScopeConfig,
-): string | null {
-  const scopes = scopeParam.split(' ').filter(Boolean);
-  let filtered: string[];
-  const preservedSet = scopeConfig.preservedSet
-    ?? (scopeConfig.preserved?.length ? new Set(scopeConfig.preserved) : undefined);
-  const removedSet = scopeConfig.removedSet
-    ?? (scopeConfig.removed?.length ? new Set(scopeConfig.removed) : undefined);
-  if (preservedSet) {
-    filtered = scopes.filter(s => preservedSet.has(s));
-  } else if (removedSet) {
-    filtered = scopes.filter(s => !removedSet.has(s));
-  } else {
-    return scopeParam;
-  }
-  return filtered.length > 0 ? filtered.join(' ') : null;
 }
 
 export function createAuthorizeRouter(
@@ -74,11 +42,9 @@ export function createAuthorizeRouter(
       }
     }
 
-    const resource = params.get('resource') || '';
-    const { error: resourceError, matchedPattern } = checkAndMatchResource(resource, config);
-    const resourceLabel: Record<string, string> = matchedPattern
-      ? { resource: matchedPattern }
-      : {};
+    const requestUri = params.get('request_uri') || '';
+    const upstreamPar = config.getUpstreamParEndpoint?.() ?? '';
+    const parActive = !!upstreamPar;
 
     logger.accessLog('authorize request', req, res, {
       scope: params.get('scope'),
@@ -87,161 +53,78 @@ export function createAuthorizeRouter(
       responseType: params.get('response_type'),
       codeChallengeMethod: params.get('code_challenge_method') || 'MISSING',
       statePresent: params.has('state'),
-      resource: resource || 'MISSING',
+      resource: params.get('resource') || 'MISSING',
+      requestUriPresent: !!requestUri,
     });
 
-    // RFC 8707 resource parameter validation
-    if (resourceError) {
-      logger.warn('authorize: resource parameter rejected', { reason: resourceError.reason, resource: resource.slice(0, 200), clientId: params.get('client_id') ?? '' });
-      config.rejectedTotal.inc({ route: ROUTE, reason: resourceError.reason, ...resourceLabel });
-      res.status(400).json({
-        error: 'invalid_request',
-        error_description: resourceError.description,
-      });
+    // PAR follow-up: client_id + request_uri only (transforms already applied at POST /par)
+    if (parActive && requestUri) {
+      const clientId = params.get('client_id') ?? '';
+      if (!clientId) {
+        logger.warn('authorize: client_id missing with request_uri', {});
+        config.rejectedTotal.inc({ route: ROUTE, reason: 'client_id_missing' });
+        res.status(400).json({
+          error: 'invalid_request',
+          error_description: 'client_id is required',
+        });
+        return;
+      }
+
+      const cimdResult = await applyCimdClientIdSubstitution(params, config, logger, 'authorize');
+      if (!cimdResult.ok) {
+        config.rejectedTotal.inc({
+          route: ROUTE,
+          reason: cimdResult.reason,
+          ...cimdResult.resourceLabel,
+          ...cimdResult.idpClientLabel,
+        });
+        res.status(cimdResult.status).json(cimdResult.body);
+        return;
+      }
+
+      const forward = new URLSearchParams();
+      forward.set('client_id', cimdResult.params.get('client_id')!);
+      forward.set('request_uri', requestUri);
+
+      const effectiveClientId = forward.get('client_id') ?? '';
+      const idpClientLabel: Record<string, string> = config.knownIdpClients?.has(effectiveClientId)
+        ? { idp_client: effectiveClientId }
+        : {};
+
+      const upstreamEndpoint = config.getUpstreamAuthEndpoint();
+      const separator = upstreamEndpoint.includes('?') ? '&' : '?';
+      const redirectUrl = `${upstreamEndpoint}${separator}${forward.toString()}`;
+      if (logger.isDebugEnabled) logger.debug('authorize redirect (request_uri)', { target: redirectUrl });
+      if (Object.keys(idpClientLabel).length > 0) config.redirectsTotal.inc(idpClientLabel);
+      else config.redirectsTotal.inc();
+      res.redirect(302, redirectUrl);
       return;
     }
 
-    // Strip unsupported response_mode
-    const responseMode = params.get('response_mode');
-    if (responseMode && responseMode !== 'query') {
-      if (logger.isDebugEnabled) logger.debug('authorize: unsupported response_mode stripped', { responseMode });
-      params.delete('response_mode');
-    }
+    const result = await applyAuthorizationRequestTransforms(
+      params,
+      config,
+      scopeConfig,
+      logger,
+      'authorize',
+    );
 
-    const clientId = params.get('client_id') ?? '';
-    let isCimd = false;
-
-    if (config.cimdResolve && clientId && isCimdClientId(clientId)) {
-      isCimd = true;
-      const urlValidation = validateCimdUrl(clientId);
-      if (!urlValidation.valid) {
-        logger.warn('authorize: invalid CIMD client_id URL', { clientId: clientId.slice(0, 80), reason: urlValidation.reason });
-        config.rejectedTotal.inc({ route: ROUTE, reason: 'cimd_url_invalid', ...resourceLabel });
-        res.status(400).json({
-          error: 'invalid_client',
-          error_description: `Invalid CIMD client_id URL: ${sanitizeForError(urlValidation.reason)}`,
-        });
-        return;
-      }
-
-      const upstreamClientId = config.cimdResolve(clientId);
-      if (!upstreamClientId) {
-        logger.warn('authorize: unknown CIMD client rejected', { clientId: clientId.slice(0, 80) });
-        config.rejectedTotal.inc({ route: ROUTE, reason: 'cimd_client_unknown', ...resourceLabel });
-        res.status(403).json({
-          error: 'invalid_client',
-          error_description: `Unknown CIMD client: ${sanitizeForError(clientId)}`,
-        });
-        return;
-      }
-
-      let cimdDoc: CimdDocument;
-      try {
-        cimdDoc = await config.cimdValidateAndCache!(clientId);
-      } catch (err) {
-        logger.error('authorize: CIMD metadata fetch/validation failed', {
-          clientId: clientId.slice(0, 80),
-          error: String(err),
-        });
-        config.rejectedTotal.inc({ route: ROUTE, reason: 'cimd_metadata_failed', ...resourceLabel });
-        res.status(400).json({
-          error: 'invalid_client',
-          error_description: 'Failed to fetch or validate CIMD metadata document',
-        });
-        return;
-      }
-
-      const redirectUri = params.get('redirect_uri');
-      if (redirectUri && !validateRedirectUri(redirectUri, cimdDoc)) {
-        logger.warn('authorize: CIMD redirect_uri mismatch', { clientId: clientId.slice(0, 80), uri: redirectUri.slice(0, 200) });
-        config.rejectedTotal.inc({ route: ROUTE, reason: 'cimd_redirect_uri_mismatch', ...resourceLabel });
-        res.status(400).json({
-          error: 'invalid_request',
-          error_description: `redirect_uri does not match any registered URI in the CIMD metadata document`,
-        });
-        return;
-      }
-
-      params.set('client_id', upstreamClientId);
-    }
-
-    // Resolve idp_client label for metrics (uses client_id after CIMD rewrite)
-    const effectiveClientId = params.get('client_id') ?? '';
-    const idpClientLabel: Record<string, string> = config.knownIdpClients?.has(effectiveClientId)
-      ? { idp_client: effectiveClientId } : {};
-
-    // Validate and wrap redirect_uri for iss interception
-    if (config.stateSecret) {
-      const redirectUri = params.get('redirect_uri');
-      if (!redirectUri) {
-        logger.warn('authorize: redirect_uri missing', { clientId: effectiveClientId });
-        config.rejectedTotal.inc({ route: ROUTE, reason: 'redirect_uri_missing', ...resourceLabel, ...idpClientLabel });
-        res.status(400).json({
-          error: 'invalid_request',
-          error_description: 'redirect_uri is required',
-        });
-        return;
-      }
-
-      if (!isCimd) {
-        // Per-client redirect_uri enforcement via dcrClientIdRedirectMap
-        const perClientPatterns = config.dcrClientIdRedirectMap?.get(effectiveClientId);
-        if (perClientPatterns) {
-          const match = matchesRedirectPattern(redirectUri, perClientPatterns);
-          if (!match.allowed) {
-            logger.warn('authorize: redirect_uri rejected (per-client)', { reason: match.reason, uri: redirectUri.slice(0, 200), clientId: effectiveClientId });
-            config.rejectedTotal.inc({ route: ROUTE, reason: 'redirect_uri_rejected', ...resourceLabel, ...idpClientLabel });
-            res.status(400).json({
-              error: 'invalid_request',
-              error_description: 'redirect_uri not allowed',
-            });
-            return;
-          }
-          if (logger.isDebugEnabled) logger.debug('authorize: redirect_uri allowed (per-client)', {
-            clientId: effectiveClientId,
-            uri: redirectUri.slice(0, 200),
-          });
-        } else {
-          // Fall through to global allowlist
-          const match = matchesRedirectPattern(redirectUri, config.stateAllowedRedirectUris!);
-          if (!match.allowed) {
-            logger.warn('authorize: redirect_uri rejected', { reason: match.reason, uri: redirectUri.slice(0, 200), clientId: effectiveClientId });
-            config.rejectedTotal.inc({ route: ROUTE, reason: 'redirect_uri_rejected', ...resourceLabel, ...idpClientLabel });
-            res.status(400).json({
-              error: 'invalid_request',
-              error_description: 'redirect_uri not allowed',
-            });
-            return;
-          }
-        }
-      }
-
-      const originalState = params.get('state') ?? null;
-      const blob = signState(
-        { redirectUri, state: originalState },
-        config.stateSecret,
-        config.stateTtlSeconds!,
-      );
-
-      params.set('redirect_uri', `${config.stateBaseUrl}/authorize/callback`);
-      params.set('state', blob);
-    }
-
-    const scope = params.get('scope');
-    if (scope) {
-      const filtered = filterScopes(scope, scopeConfig);
-      if (filtered !== null) {
-        params.set('scope', filtered);
-      } else {
-        params.delete('scope');
-      }
+    if (!result.ok) {
+      config.rejectedTotal.inc({
+        route: ROUTE,
+        reason: result.reason,
+        ...result.resourceLabel,
+        ...result.idpClientLabel,
+      });
+      res.status(result.status).json(result.body);
+      return;
     }
 
     const upstreamEndpoint = config.getUpstreamAuthEndpoint();
     const separator = upstreamEndpoint.includes('?') ? '&' : '?';
-    const redirectUrl = `${upstreamEndpoint}${separator}${params.toString()}`;
+    const redirectUrl = `${upstreamEndpoint}${separator}${result.params.toString()}`;
     if (logger.isDebugEnabled) logger.debug('authorize redirect', { target: redirectUrl });
-    const redirectLabels = { ...resourceLabel, ...idpClientLabel };
+    const redirectLabels = { ...result.resourceLabel, ...result.idpClientLabel };
     if (Object.keys(redirectLabels).length > 0) config.redirectsTotal.inc(redirectLabels);
     else config.redirectsTotal.inc();
     res.redirect(302, redirectUrl);

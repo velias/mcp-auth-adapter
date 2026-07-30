@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import express from 'express';
-import { Logger } from '../logger';
+import { Logger, truncateClientIdForLog, truncateUriForLog } from '../logger';
 import { readResponseWithLimit } from '../fetch-utils';
 import { isCimdClientId, validateCimdUrl, resolveUpstreamClientId, sanitizeForError } from '../cimd';
 import { matchesRedirectPattern, checkAndMatchResource, ResourceConfig } from '../uri-validation';
@@ -81,9 +81,9 @@ async function handleTokenRequest(
     const resource = str(rawBody.resource);
 
     logger.accessLog('token proxy request', req, res, {
-      clientId: clientId.startsWith('https://') ? clientId.slice(0, 80) : clientId,
+      clientId: truncateClientIdForLog(clientId),
       grantType,
-      redirectUri: redirectUri ? redirectUri.split('?')[0].slice(0, 200) : undefined,
+      redirectUri: redirectUri ? truncateUriForLog(redirectUri.split('?')[0]) : undefined,
       hasAuthHeader: !!req.get('authorization'),
       hasDpopHeader: !!req.get('dpop'),
       resource: resource || 'MISSING',
@@ -97,7 +97,7 @@ async function handleTokenRequest(
       const { error: resourceError, matchedPattern } = checkAndMatchResource(resource, config);
       resourceLabel = matchedPattern ? { resource: matchedPattern } : {};
       if (resourceError) {
-        logger.warn('token proxy: resource parameter rejected', { reason: resourceError.reason, resource: resource.slice(0, 200), grantType, clientId: clientId.startsWith('https://') ? clientId.slice(0, 80) : clientId });
+        logger.warn('token proxy: resource parameter rejected', { reason: resourceError.reason, resource: truncateUriForLog(resource), grantType, clientId: truncateClientIdForLog(clientId) });
         config.rejectedTotal.inc({
           route: ROUTE,
           reason: resourceError.reason,
@@ -124,7 +124,7 @@ async function handleTokenRequest(
     if (isCimd) {
       const urlValidation = validateCimdUrl(clientId);
       if (!urlValidation.valid) {
-        logger.warn('token proxy: invalid CIMD client_id URL', { clientId: clientId.slice(0, 80), reason: urlValidation.reason });
+        logger.warn('token proxy: invalid CIMD client_id URL', { clientId: truncateClientIdForLog(clientId), reason: urlValidation.reason });
         config.rejectedTotal.inc({
           route: ROUTE,
           reason: 'cimd_url_invalid',
@@ -145,7 +145,7 @@ async function handleTokenRequest(
       );
 
       if (!upstreamClientId) {
-        logger.warn('token proxy: unknown CIMD client rejected', { clientId: clientId.slice(0, 80) });
+        logger.warn('token proxy: unknown CIMD client rejected', { clientId: truncateClientIdForLog(clientId) });
         config.rejectedTotal.inc({
           route: ROUTE,
           reason: 'cimd_client_unknown',
@@ -191,7 +191,7 @@ async function handleTokenRequest(
         if (perClientPatterns) {
           const match = matchesRedirectPattern(redirectUri, perClientPatterns);
           if (!match.allowed) {
-            logger.warn('token proxy: redirect_uri rejected (per-client)', { reason: match.reason, uri: redirectUri.slice(0, 200), clientId: effectiveClientId });
+            logger.warn('token proxy: redirect_uri rejected (per-client)', { reason: match.reason, uri: truncateUriForLog(redirectUri), clientId: effectiveClientId });
             config.rejectedTotal.inc({
               route: ROUTE,
               reason: 'redirect_uri_rejected',
@@ -207,12 +207,12 @@ async function handleTokenRequest(
           }
           if (logger.isDebugEnabled) logger.debug('token proxy: redirect_uri allowed (per-client)', {
             clientId: effectiveClientId,
-            uri: redirectUri.slice(0, 200),
+            uri: truncateUriForLog(redirectUri),
           });
         } else {
           const match = matchesRedirectPattern(redirectUri, config.redirectAllowedUris!);
           if (!match.allowed) {
-            logger.warn('token proxy: redirect_uri rejected', { reason: match.reason, uri: redirectUri.slice(0, 200), clientId: effectiveClientId });
+            logger.warn('token proxy: redirect_uri rejected', { reason: match.reason, uri: truncateUriForLog(redirectUri), clientId: effectiveClientId });
             config.rejectedTotal.inc({
               route: ROUTE,
               reason: 'redirect_uri_rejected',

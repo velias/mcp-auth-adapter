@@ -1089,3 +1089,164 @@ describe('GET /authorize (idp_client metrics label)', () => {
     expect(metricsRes.text).toContain('reason="redirect_uri_rejected"');
   });
 });
+
+describe('GET /authorize (PAR request_uri passthrough)', () => {
+  const UPSTREAM_PAR =
+    'https://sso.example.com/auth/realms/test/protocol/openid-connect/ext/par/request';
+
+  const UPSTREAM_WITH_PAR = {
+    ...MOCK_UPSTREAM_DOC,
+    pushed_authorization_request_endpoint: UPSTREAM_PAR,
+  };
+
+  it('forwards client_id and request_uri without redirect_uri wrapping when upstream has PAR', async () => {
+    const app = createApp({
+      config: CONFIG,
+      upstreamDoc: UPSTREAM_WITH_PAR,
+    }).app;
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'test-client',
+        request_uri: 'urn:ietf:params:oauth:request_uri:abc',
+        // Extra params must not be forwarded (already stored at PAR time)
+        redirect_uri: 'http://localhost:8080/callback',
+        scope: 'openid',
+      });
+
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.location);
+    expect(location.origin + location.pathname).toBe(UPSTREAM_AUTH_ENDPOINT);
+    expect(location.searchParams.get('client_id')).toBe('test-client');
+    expect(location.searchParams.get('request_uri')).toBe('urn:ietf:params:oauth:request_uri:abc');
+    expect(location.searchParams.get('redirect_uri')).toBeNull();
+    expect(location.searchParams.get('scope')).toBeNull();
+  });
+
+  it('substitutes CIMD client_id on request_uri passthrough', async () => {
+    const CIMD_URL = 'https://cursor.com/oauth-client.json';
+    const app = createApp({
+      config: {
+        ...CONFIG,
+        cimdEnabled: true,
+        cimdMap: { [CIMD_URL]: 'cursor-sso-client' },
+      },
+      upstreamDoc: UPSTREAM_WITH_PAR,
+      cimdFetcher: () => Promise.resolve({
+        client_id: CIMD_URL,
+        redirect_uris: ['http://127.0.0.1:8080/callback'],
+      }),
+    }).app;
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: CIMD_URL,
+        request_uri: 'urn:ietf:params:oauth:request_uri:abc',
+      });
+
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.location);
+    expect(location.searchParams.get('client_id')).toBe('cursor-sso-client');
+    expect(location.searchParams.get('request_uri')).toBe('urn:ietf:params:oauth:request_uri:abc');
+  });
+
+  it('does not take request_uri shortcut when upstream omits PAR', async () => {
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'test-client',
+        request_uri: 'urn:ietf:params:oauth:request_uri:abc',
+        // No redirect_uri — normal path requires it when state wrapping is on
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error_description).toBe('redirect_uri is required');
+  });
+
+  it('requires client_id with request_uri when PAR is active', async () => {
+    const app = createApp({
+      config: CONFIG,
+      upstreamDoc: UPSTREAM_WITH_PAR,
+    }).app;
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        request_uri: 'urn:ietf:params:oauth:request_uri:abc',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error_description).toBe('client_id is required');
+  });
+
+  it('returns 400 for invalid CIMD URL on request_uri passthrough', async () => {
+    const app = createApp({
+      config: {
+        ...CONFIG,
+        cimdEnabled: true,
+        cimdMap: {},
+        cimdDefaultClientId: 'fallback',
+      },
+      upstreamDoc: UPSTREAM_WITH_PAR,
+    }).app;
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'https://evil.com/../secret',
+        request_uri: 'urn:ietf:params:oauth:request_uri:abc',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_client');
+  });
+
+  it('returns 403 for unknown CIMD URL on request_uri passthrough', async () => {
+    const app = createApp({
+      config: {
+        ...CONFIG,
+        cimdEnabled: true,
+        cimdMap: { 'https://cursor.com/oauth-client.json': 'cursor-sso-client' },
+      },
+      upstreamDoc: UPSTREAM_WITH_PAR,
+    }).app;
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: 'https://unknown.com/oauth.json',
+        request_uri: 'urn:ietf:params:oauth:request_uri:abc',
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('invalid_client');
+  });
+
+  it('returns 400 when CIMD metadata fetch fails on request_uri passthrough', async () => {
+    const CIMD_URL = 'https://cursor.com/oauth-client.json';
+    const app = createApp({
+      config: {
+        ...CONFIG,
+        cimdEnabled: true,
+        cimdMap: { [CIMD_URL]: 'cursor-sso-client' },
+      },
+      upstreamDoc: UPSTREAM_WITH_PAR,
+      cimdFetcher: () => Promise.reject(new Error('SSRF blocked')),
+    }).app;
+
+    const res = await request(app)
+      .get('/authorize')
+      .query({
+        client_id: CIMD_URL,
+        request_uri: 'urn:ietf:params:oauth:request_uri:abc',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_client');
+    expect(res.body.error_description).toBe('Failed to fetch or validate CIMD metadata document');
+  });
+});

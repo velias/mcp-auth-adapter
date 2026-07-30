@@ -11,6 +11,7 @@ import { createAuthorizeCallbackRouter } from './routes/authorize-callback';
 import { createHealthRouter, createUpstreamProbe, UpstreamHealth } from './routes/health';
 import { createMetricsRouter } from './routes/metrics';
 import { createTokenRouter } from './routes/token';
+import { createParRouter } from './routes/par';
 import {
   CimdCache,
   fetchCimdDocument,
@@ -26,6 +27,7 @@ export interface UpstreamState {
   wellKnownDocumentSerialized: string;
   upstreamAuthorizationEndpoint: string;
   upstreamTokenEndpoint: string;
+  upstreamParEndpoint: string;
   upstreamIssuer: string;
   upstreamSupportsIss: boolean;
 }
@@ -45,11 +47,13 @@ export function buildUpstreamState(
   fromFallback = false,
 ): UpstreamState {
   const wellKnownDocument = buildWellKnownDocument(upstreamDoc, config);
+  const parEndpoint = upstreamDoc.pushed_authorization_request_endpoint;
   return {
     wellKnownDocument,
     wellKnownDocumentSerialized: JSON.stringify(wellKnownDocument),
     upstreamAuthorizationEndpoint: upstreamDoc.authorization_endpoint as string,
     upstreamTokenEndpoint: upstreamDoc.token_endpoint as string,
+    upstreamParEndpoint: typeof parEndpoint === 'string' ? parEndpoint : '',
     upstreamIssuer: (upstreamDoc.issuer as string) ?? config.upstreamSsoUrl,
     upstreamSupportsIss: fromFallback
       ? false
@@ -177,6 +181,7 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
 
     const authorizeRouter = createAuthorizeRouter({
       getUpstreamAuthEndpoint: () => state.upstreamAuthorizationEndpoint,
+      getUpstreamParEndpoint: () => state.upstreamParEndpoint,
       removed: config.authScopesRemoved,
       preserved: config.authScopesPreserved,
       requireResource: config.requireResource,
@@ -227,6 +232,27 @@ export function createApp({ config, upstreamDoc, fromFallback, cimdFetcher }: Cr
     }, logger);
     if (metricsMiddleware) app.use(metricsMiddleware, tokenRouter);
     else app.use(tokenRouter);
+
+    // PAR proxy — mounted with auth proxy; handlers 404 when upstream omits PAR
+    const parRouter = createParRouter({
+      getUpstreamParEndpoint: () => state.upstreamParEndpoint,
+      removed: config.authScopesRemoved,
+      preserved: config.authScopesPreserved,
+      requireResource: config.requireResource,
+      allowedResources: config.allowedResources,
+      cimdResolve,
+      cimdValidateAndCache,
+      stateBaseUrl: config.authStateSecret ? config.baseUrl : undefined,
+      stateSecret: config.authStateSecret,
+      stateTtlSeconds: config.authStateTtlSeconds,
+      stateAllowedRedirectUris: config.authStateSecret ? config.allowedRedirectUris : undefined,
+      dcrClientIdRedirectMap: config.dcrClientIdRedirectMap.size > 0 ? config.dcrClientIdRedirectMap : undefined,
+      knownIdpClients: knownIdpClients.size > 0 ? knownIdpClients : undefined,
+      metricsRegistry,
+      rejectedTotal,
+    }, logger);
+    if (metricsMiddleware) app.use(metricsMiddleware, parRouter);
+    else app.use(parRouter);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

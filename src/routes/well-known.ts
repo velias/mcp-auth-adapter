@@ -62,6 +62,12 @@ const DPOP_WHITELIST_FIELDS = [
   'dpop_signing_alg_values_supported',
 ];
 
+/** PAR metadata — included only when auth proxy is active and upstream announces PAR. */
+const PAR_WHITELIST_FIELDS = [
+  'pushed_authorization_request_endpoint',
+  'require_pushed_authorization_requests',
+];
+
 export function buildWellKnownDocument(
   upstreamDoc: Record<string, unknown>,
   config: AppConfig,
@@ -78,6 +84,20 @@ export function buildWellKnownDocument(
   // the facade cannot satisfy proof htu would push clients into failing token calls.
   if (config.dpopEnabled) {
     for (const field of DPOP_WHITELIST_FIELDS) {
+      if (upstreamDoc[field] !== undefined) {
+        doc[field] = upstreamDoc[field];
+      }
+    }
+  }
+
+  // PAR: only advertise when we can proxy it (auth proxy on) and upstream has the endpoint.
+  // Never invent pushed_authorization_request_endpoint.
+  if (
+    config.proxyAuthEndpoint &&
+    typeof upstreamDoc.pushed_authorization_request_endpoint === 'string' &&
+    upstreamDoc.pushed_authorization_request_endpoint
+  ) {
+    for (const field of PAR_WHITELIST_FIELDS) {
       if (upstreamDoc[field] !== undefined) {
         doc[field] = upstreamDoc[field];
       }
@@ -111,6 +131,9 @@ export function buildWellKnownDocument(
     doc.authorization_endpoint = `${config.baseUrl}/authorize`;
     doc.token_endpoint = `${config.baseUrl}/token`;
     doc.authorization_response_iss_parameter_supported = true;
+    if (doc.pushed_authorization_request_endpoint !== undefined) {
+      doc.pushed_authorization_request_endpoint = `${config.baseUrl}/par`;
+    }
   }
 
   if (config.cimdEnabled) {

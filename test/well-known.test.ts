@@ -204,9 +204,60 @@ describe('Well-Known Discovery Endpoints', () => {
       expect(res.body.frontchannel_logout_supported).toBeUndefined();
       expect(res.body.backchannel_logout_supported).toBeUndefined();
       expect(res.body.device_authorization_endpoint).toBeUndefined();
-      expect(res.body.pushed_authorization_request_endpoint).toBeUndefined();
       expect(res.body.mtls_endpoint_aliases).toBeUndefined();
       expect(res.body.tls_client_certificate_bound_access_tokens).toBeUndefined();
+    });
+
+    it('rewrites pushed_authorization_request_endpoint when auth proxy is on and upstream has PAR', async () => {
+      const app = makeApp(makeConfig({ proxyAuthEndpoint: true }));
+
+      const res = await request(app).get('/.well-known/openid-configuration');
+
+      expect(res.body.pushed_authorization_request_endpoint).toBe('http://localhost:3000/par');
+    });
+
+    it('passes through require_pushed_authorization_requests when advertising PAR', async () => {
+      const upstream = {
+        ...MOCK_UPSTREAM_DOC,
+        require_pushed_authorization_requests: false,
+      };
+      const app = makeApp(makeConfig({ proxyAuthEndpoint: true }), upstream);
+
+      const res = await request(app).get('/.well-known/openid-configuration');
+
+      expect(res.body.pushed_authorization_request_endpoint).toBe('http://localhost:3000/par');
+      expect(res.body.require_pushed_authorization_requests).toBe(false);
+    });
+
+    it('omits PAR fields when auth proxy is off even if upstream has PAR', async () => {
+      const app = makeApp(makeConfig({
+        proxyAuthEndpoint: false,
+        authStateSecret: undefined,
+      }));
+
+      const res = await request(app).get('/.well-known/openid-configuration');
+
+      expect(res.body.pushed_authorization_request_endpoint).toBeUndefined();
+      expect(res.body.require_pushed_authorization_requests).toBeUndefined();
+    });
+
+    it('omits PAR fields when upstream does not announce PAR', async () => {
+      const noPar = { ...MOCK_UPSTREAM_DOC };
+      delete noPar.pushed_authorization_request_endpoint;
+      const app = makeApp(makeConfig({ proxyAuthEndpoint: true }), noPar);
+
+      const res = await request(app).get('/.well-known/openid-configuration');
+
+      expect(res.body.pushed_authorization_request_endpoint).toBeUndefined();
+    });
+
+    it('does not invent require_pushed_authorization_requests when upstream omits it', async () => {
+      const app = makeApp(makeConfig({ proxyAuthEndpoint: true }));
+
+      const res = await request(app).get('/.well-known/openid-configuration');
+
+      expect(res.body.pushed_authorization_request_endpoint).toBe('http://localhost:3000/par');
+      expect(res.body.require_pushed_authorization_requests).toBeUndefined();
     });
 
     it('omits upstream dpop_signing_alg_values_supported when dpopEnabled is false (default)', async () => {
@@ -398,6 +449,7 @@ describe('Well-Known Discovery Endpoints', () => {
       expect(defaults.introspection_endpoint).toBe('https://sso.example.com/auth/realms/test/protocol/openid-connect/token/introspect');
       expect(defaults.userinfo_endpoint).toBe('https://sso.example.com/auth/realms/test/protocol/openid-connect/userinfo');
       expect(defaults.revocation_endpoint).toBe('https://sso.example.com/auth/realms/test/protocol/openid-connect/revoke');
+      expect(defaults.pushed_authorization_request_endpoint).toBeUndefined();
     });
 
     it('includes code_challenge_methods_supported with S256', () => {
@@ -433,6 +485,7 @@ describe('Well-Known Discovery Endpoints', () => {
       expect(res.body.registration_endpoint).toBe('http://localhost:3000/register');
       expect(res.body.code_challenge_methods_supported).toEqual(['S256']);
       expect(res.body.token_endpoint).toBe('http://localhost:3000/token');
+      expect(res.body.pushed_authorization_request_endpoint).toBeUndefined();
     });
   });
 });

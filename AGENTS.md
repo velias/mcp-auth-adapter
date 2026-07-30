@@ -53,11 +53,20 @@ issue tokens — all real auth/token work stays on the upstream IdP.
   skipped for CIMD because client_id is rewritten). Always forwards `DPoP` /
   `DPoP-Nonce` request headers and relays `DPoP-Nonce` responses. Always active
   when the authorize proxy is active.
+- **PAR proxy** (RFC 9126) — `POST /par` applies the same authorize-time
+  transforms (scopes, CIMD, redirect_uri/state wrapping, resource) and proxies
+  to the upstream PAR endpoint, returning the upstream `request_uri` (IdP holds
+  PAR state; adapter stays stateless). Forwards `Authorization` / `DPoP` /
+  `DPoP-Nonce` like `/token`. `GET /authorize` with `request_uri` forwards only
+  `client_id` + `request_uri` (CIMD rewrite only). Auto-enables when the
+  authorize proxy is active **and** upstream advertises
+  `pushed_authorization_request_endpoint` — discovery is rewritten to
+  `{MCP_BASE_URL}/par`; never invented if upstream omits PAR.
 - **CIMD adapter** (EXPERIMENTAL) — Accepts CIMD-style `client_id` URLs from
   MCP clients, validates metadata documents, maps them to upstream IdP
-  client_ids, and proxies `/authorize` and `/token` with client_id substitution.
-  Auto-enables when `MCP_PROXY_CIMD_MAP` or `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID`
-  is set.
+  client_ids, and proxies `/authorize`, `/par`, and `/token` with client_id
+  substitution. Auto-enables when `MCP_PROXY_CIMD_MAP` or
+  `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID` is set.
 
 ## Tech stack
 
@@ -79,11 +88,12 @@ src/
   index.ts           # Entry point: loads env, fetches upstream doc, starts server
   app.ts             # Express app factory, middleware ordering, UpstreamState
   config.ts          # AppConfig type + loadConfig() from MCP_* env vars; exports ParsedClientNameEntry, parseClientNameMap(), matchClientName(), buildClientIdRedirectMap()
-  logger.ts          # Structured line logger (key="value" format, all values double-quoted)
+  logger.ts          # Structured line logger (key="value" format, all values double-quoted); truncateClientIdForLog / truncateUriForLog
   metrics.ts         # Prometheus metrics primitives (Counter, Gauge, Histogram, Registry, no-op stubs)
   fetch-utils.ts     # Shared fetch helpers (readResponseWithLimit — streaming read with byte cap)
   state-signer.ts    # HMAC-SHA256 state blob signing/verification with key rotation
   uri-validation.ts  # Shared redirect URI security validation, pattern matching, resource pattern pre-parsing + matching (domain wildcards)
+  auth-request-transforms.ts # Shared authorize/PAR transforms (scopes, CIMD, redirect_uri/state, resource)
   middleware/
     security.ts      # requireJsonContentType (Content-Type guard for DCR)
     metrics.ts       # Per-router HTTP request counting and latency middleware
@@ -91,17 +101,19 @@ src/
   routes/
     well-known.ts    # /.well-known/* — filtered upstream OIDC metadata
     register.ts      # POST /register — DCR with client_name mapping, input validation, RegisterRouterConfig
-    authorize.ts     # GET /authorize — redirect adapter, scope filtering, state wrapping, CIMD
+    authorize.ts     # GET /authorize — redirect adapter, scope filtering, state wrapping, CIMD, PAR request_uri
     authorize-callback.ts # GET /authorize/callback — iss interception, state verification
     token.ts         # POST /token — unified token proxy with redirect_uri rewriting
+    par.ts           # POST /par — RFC 9126 PAR proxy (upstream-held request_uri)
     health.ts        # /health (composite check with upstream probe), /health/live, /health/ready; exports UpstreamHealth, createUpstreamProbe
     metrics.ts       # GET /metrics — Prometheus text exposition format endpoint
 test/
-  well-known.test.ts          # Well-known doc content, whitelist, cache-control, refresh, CIMD fields
+  well-known.test.ts          # Well-known doc content, whitelist, cache-control, refresh, CIMD fields, PAR rewrite
   register.test.ts            # DCR response, input validation, content-type guard, feature flag, client name mapping, access log fields
-  authorize.test.ts           # Redirect, scope filtering, state wrapping, redirect_uri validation, CIMD, per-client redirect_uri, idp_client metrics
+  authorize.test.ts           # Redirect, scope filtering, state wrapping, redirect_uri validation, CIMD, per-client redirect_uri, idp_client metrics, PAR request_uri
   authorize-callback.test.ts  # Callback: state verification, iss validation, error forwarding
   token.test.ts               # Token proxy: substitution, redirect_uri rewriting, passthrough, client_credentials, JWT bearer, Authorization header forwarding, per-client redirect_uri, idp_client metrics
+  par.test.ts                 # PAR proxy: transforms, upstream request_uri, header forwarding, 404 without upstream PAR
   state-signer.test.ts        # State blob sign/verify, tamper, expiry, key rotation
   uri-validation.test.ts      # URI security checks, pattern matching
   cimd.test.ts                # CIMD URL/doc validation, cache, resolution, IP checks
@@ -121,16 +133,19 @@ test/
   and `express.json()` so probes skip unnecessary processing. `/metrics` is
   mounted after compression (responses can be large) but before body parsers.
 - **No explicit feature flags.** All optional features (DCR, authorize proxy,
-  CIMD) auto-enable based on the presence of their configuration — see
-  "Key responsibilities" above. Exceptions: `MCP_METRICS_ENABLED` (default
-  `true`) controls the metrics subsystem; `MCP_PROXY_DPOP_ENABLED` (default
-  `false`) controls advertising upstream DPoP metadata in well-known
-  (header forwarding on `/token` is always on).
+  CIMD, PAR) auto-enable based on the presence of their configuration / upstream
+  metadata — see "Key responsibilities" above. Exceptions: `MCP_METRICS_ENABLED`
+  (default `true`) controls the metrics subsystem; `MCP_PROXY_DPOP_ENABLED`
+  (default `false`) controls advertising upstream DPoP metadata in well-known
+  (header forwarding on `/token` and `/par` is always on). PAR has **no** env
+  flag: it auto-enables when the authorize proxy is active and upstream
+  announces `pushed_authorization_request_endpoint`.
 - **`UpstreamState`** holds the cached well-known document (already
   filtered/merged for clients) plus its pre-serialized JSON string (served
   directly by the well-known handler without per-request `JSON.stringify`),
   the raw `upstreamAuthorizationEndpoint` URL (used by the authorize redirect),
-  `upstreamTokenEndpoint` (used by the token proxy), `upstreamIssuer` (for
+  `upstreamTokenEndpoint` (used by the token proxy), `upstreamParEndpoint`
+  (used by the PAR proxy; empty when upstream omits PAR), `upstreamIssuer` (for
   RFC 9207 validation), and `upstreamSupportsIss` (derived from upstream
   metadata, defaults to `false` when the upstream doc cannot be fetched).
 - **Upstream health probe.** `GET /health` performs a rate-limited live probe of the
@@ -188,7 +203,8 @@ test/
 - **Access logging.** `logger.accessLog(message, req, res, { ...routeFields })`
   defers to `res.on('finish')` so the log includes `status`. Key route fields:
   `/authorize`: `codeChallengeMethod`, `statePresent`;
-  `/token`: `hasAuthHeader`;
+  `/token`: `hasAuthHeader`, `hasDpopHeader`;
+  `/par`: `codeChallengeMethod`, `statePresent`, `hasAuthHeader`, `hasDpopHeader`;
   `/register`: `clientName` (truncated 200 chars), `idpClient`, `matchedMapping`,
   `softwareId`, `scope`, `grantTypes`.
   Controlled by `MCP_ACCESS_LOG` (default `true`).
@@ -202,7 +218,7 @@ test/
   per call. The existing `parseResourcePatterns()` → `ParsedResourcePattern[]`
   pattern is the model: parse once at config load, match with field comparisons
   at runtime. `matchClientName()` is only on the cold DCR path; hot paths
-  (`/authorize`, `/token`) use O(1) `Map.has()` and `Set.has()` lookups.
+  (`/authorize`, `/par`, `/token`) use O(1) `Map.has()` and `Set.has()` lookups.
 - **One parse per input per request.** When a request value (e.g. a URI) needs
   both validation and a derived result (metrics label, pattern match), do both
   in a single pass. Avoid calling separate helpers that each re-parse the same
@@ -219,10 +235,25 @@ test/
 
 ## Configuration
 
-All env vars are prefixed with `MCP_`. See `.env.example` for the full list.
-Key ones: `MCP_BASE_URL`, `MCP_UPSTREAM_SSO_URL`, `MCP_PROXY_DCR_CLIENT_ID`,
-`MCP_WELL_KNOWN_SCOPES_SUPPORTED`, `MCP_PROXY_AUTH_SCOPES_REMOVED`,
-`MCP_PROXY_AUTH_SCOPES_PRESERVED`.
+All env vars are prefixed with `MCP_`. See `.env.example` for the full list
+(same group order as the README Configuration table).
+
+Key ones: `MCP_BASE_URL`, `MCP_UPSTREAM_SSO_URL`, `MCP_PROXY_AUTH_STATE_SECRET`,
+`MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS`, `MCP_PROXY_DCR_CLIENT_ID`.
+
+Authorize proxy (RFC 9207 iss + scopes + resource): `MCP_PROXY_AUTH_STATE_SECRET`
+(required when authorize proxy is active), `MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS`
+(optional, for key rotation), `MCP_PROXY_AUTH_STATE_TTL_MINUTES` (default 30),
+`MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` (required when authorize proxy is active
+unless CIMD-only, or all `MCP_PROXY_DCR_CLIENT_NAME_MAP` entries have per-client
+`allowed_redirect_uris` and no fallback `MCP_PROXY_DCR_CLIENT_ID`),
+`MCP_PROXY_AUTH_SCOPES_REMOVED` / `MCP_PROXY_AUTH_SCOPES_PRESERVED`,
+`MCP_PROXY_AUTH_REQUIRE_RESOURCE`, `MCP_PROXY_AUTH_ALLOWED_RESOURCES`
+(comma-separated URI patterns — trailing `*` = path prefix match, `*.domain.com`
+= domain wildcard matching domain and all subdomains).
+
+PAR (RFC 9126): no env flag — auto-enabled when authorize proxy is active and
+upstream advertises `pushed_authorization_request_endpoint`.
 
 DCR client name mapping: `MCP_PROXY_DCR_CLIENT_NAME_MAP` (JSON object — keys are
 `client_name` patterns with trailing `*` for prefix match, values are string
@@ -230,28 +261,18 @@ client_ids or objects with `client_id` + optional `allowed_redirect_uris`).
 Setting this alone enables DCR; unmatched names fall back to
 `MCP_PROXY_DCR_CLIENT_ID` or are rejected if no fallback.
 
-RFC 9207 iss interception: `MCP_PROXY_AUTH_STATE_SECRET` (required when
-authorize proxy is active), `MCP_PROXY_AUTH_STATE_SECRET_PREVIOUS` (optional,
-for key rotation), `MCP_PROXY_AUTH_STATE_TTL_MINUTES` (default 30),
-`MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` (required when DCR is also active;
-not required when all `MCP_PROXY_DCR_CLIENT_NAME_MAP` entries have per-client
-`allowed_redirect_uris` and no fallback `MCP_PROXY_DCR_CLIENT_ID`).
-
 CIMD (EXPERIMENTAL): `MCP_PROXY_CIMD_MAP`, `MCP_PROXY_CIMD_DEFAULT_CLIENT_ID`,
 `MCP_PROXY_CIMD_CACHE_MINUTES`.
 
-RFC 8707 Resource Parameter: `MCP_PROXY_AUTH_REQUIRE_RESOURCE` (boolean,
-default `false`), `MCP_PROXY_AUTH_ALLOWED_RESOURCES` (comma-separated URI
-patterns — trailing `*` = path prefix match, `*.domain.com` = domain wildcard
-matching domain and all subdomains, e.g. `https://*.corp.example.com/*`).
-
-Observability: `MCP_METRICS_ENABLED`, `MCP_ACCESS_LOG`.
+Well-known: `MCP_WELL_KNOWN_SCOPES_SUPPORTED`, `MCP_WELL_KNOWN_REFRESH_MINUTES`.
 
 DPoP: `MCP_PROXY_DPOP_ENABLED` (default `false`) — when true, advertise
 upstream `dpop_signing_alg_values_supported` in well-known; header forwarding
-on `/token` is always on.
+on `/token` and `/par` is always on.
 
-Lifecycle: `MCP_SHUTDOWN_TIMEOUT_SECONDS`.
+Observability: `MCP_ACCESS_LOG`, `MCP_METRICS_ENABLED`, `MCP_DEBUG`.
+
+Lifecycle: `MCP_PORT`, `MCP_SHUTDOWN_TIMEOUT_SECONDS`.
 
 `loadConfig()` in `src/config.ts` validates and returns an `AppConfig` object.
 
@@ -340,13 +361,16 @@ npm run lint:fix     # ESLint auto-fix
   multiple routes (e.g. `/authorize` and `/token`), extract it into a shared
   helper in the appropriate `src/*.ts` utility module rather than duplicating
   inline. Route handlers should be thin orchestrators that call shared functions
-  and map results to HTTP responses. Existing examples:
+  and map results to HTTP responses.   Existing examples:
   - `src/uri-validation.ts` — `validateRedirectUriSecurity()`,
     `validateResourceUri()`, `matchesRedirectPattern()`,
     `parseResourcePatterns()` (config-time compiler),
     `checkAndMatchResource()` (single-pass validation + pattern match)
+  - `src/auth-request-transforms.ts` — `applyAuthorizationRequestTransforms()`,
+    `applyCimdClientIdSubstitution()`, `filterScopes()` shared by `/authorize`
+    and `/par`
   - `src/state-signer.ts` — `signState()`, `verifyState()`
-  - `src/cimd.ts` — validation, resolution, caching used by both authorize and
+  - `src/cimd.ts` — validation, resolution, caching used by authorize, PAR, and
     token routes
   - `src/config.ts` — shared interfaces (`AppConfig`, `ResourceConfig` via
     re-export from uri-validation), `ParsedClientNameEntry`,
