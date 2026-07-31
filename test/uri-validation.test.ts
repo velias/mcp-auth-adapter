@@ -68,6 +68,16 @@ describe('validateRedirectUriSecurity', () => {
     const result = validateRedirectUriSecurity('http://localhost/\tcallback');
     expect(result).toEqual({ valid: false, reason: 'contains control characters' });
   });
+
+  it('rejects javascript: scheme', () => {
+    const result = validateRedirectUriSecurity('javascript:alert(1)');
+    expect(result).toEqual({ valid: false, reason: 'scheme "javascript" is not allowed' });
+  });
+
+  it('rejects data: scheme', () => {
+    const result = validateRedirectUriSecurity('data:text/html,hi');
+    expect(result).toEqual({ valid: false, reason: 'scheme "data" is not allowed' });
+  });
 });
 
 describe('matchesRedirectPattern', () => {
@@ -122,6 +132,47 @@ describe('matchesRedirectPattern', () => {
   it('does not match partial scheme (http:// vs https://)', () => {
     const result = matchesRedirectPattern('https://localhost:8080/cb', PATTERNS);
     expect(result).toEqual({ allowed: false, reason: 'no matching pattern' });
+  });
+
+  it('root host wildcard allows any port and path', () => {
+    const patterns = ['http://something*'];
+    expect(matchesRedirectPattern('http://something', patterns)).toEqual({ allowed: true });
+    expect(matchesRedirectPattern('http://something/', patterns)).toEqual({ allowed: true });
+    expect(matchesRedirectPattern('http://something/callback', patterns)).toEqual({ allowed: true });
+    expect(matchesRedirectPattern('http://something:8080/callback', patterns)).toEqual({ allowed: true });
+    expect(matchesRedirectPattern('http://something:9999', patterns)).toEqual({ allowed: true });
+  });
+
+  it('root host wildcard rejects domain-extension attacks', () => {
+    const patterns = ['http://something*', 'https://app.example.com*'];
+    expect(matchesRedirectPattern('http://something.evil.com/callback', patterns))
+      .toEqual({ allowed: false, reason: 'no matching pattern' });
+    expect(matchesRedirectPattern('https://app.example.com.evil.com/steal', patterns))
+      .toEqual({ allowed: false, reason: 'no matching pattern' });
+    expect(matchesRedirectPattern('http://localhost.evil.com:8080/x', ['http://localhost*']))
+      .toEqual({ allowed: false, reason: 'no matching pattern' });
+  });
+
+  it('path-prefix wildcard still requires path prefix', () => {
+    const patterns = ['https://chatgpt.com/connector/oauth/*'];
+    expect(matchesRedirectPattern('https://chatgpt.com/connector/oauth/x', patterns))
+      .toEqual({ allowed: true });
+    expect(matchesRedirectPattern('https://chatgpt.com/connector/oauth', patterns))
+      .toEqual({ allowed: true });
+    expect(matchesRedirectPattern('https://chatgpt.com/other', patterns))
+      .toEqual({ allowed: false, reason: 'no matching pattern' });
+  });
+
+  it('explicit port in pattern is enforced', () => {
+    const patterns = ['https://host.example:8443/callback*'];
+    expect(matchesRedirectPattern('https://host.example:8443/callback', patterns))
+      .toEqual({ allowed: true });
+    expect(matchesRedirectPattern('https://host.example:8443/callback/more', patterns))
+      .toEqual({ allowed: true });
+    expect(matchesRedirectPattern('https://host.example/callback', patterns))
+      .toEqual({ allowed: false, reason: 'no matching pattern' });
+    expect(matchesRedirectPattern('https://host.example:9443/callback', patterns))
+      .toEqual({ allowed: false, reason: 'no matching pattern' });
   });
 });
 

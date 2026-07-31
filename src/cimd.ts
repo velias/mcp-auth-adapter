@@ -113,6 +113,10 @@ export function validateCimdDocument(
     if (typeof doc.redirect_uris[i] !== 'string') {
       return { valid: false, reason: `redirect_uris[${i}] is not a string` };
     }
+    const uriCheck = validateRedirectUriSecurity(doc.redirect_uris[i] as string);
+    if (!uriCheck.valid) {
+      return { valid: false, reason: `redirect_uris[${i}] ${uriCheck.reason}` };
+    }
   }
 
   if (doc.token_endpoint_auth_method !== undefined) {
@@ -170,6 +174,44 @@ function isPrivateIPv4(ip: string): boolean {
   return false;
 }
 
+/**
+ * Parses the IPv4 payload of an IPv6-mapped address suffix (dotted or hex).
+ * Returns null when `rest` is not a valid mapped IPv4 encoding.
+ */
+function parseMappedIPv4Rest(rest: string): string | null {
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(rest)) return rest;
+
+  const hexParts = rest.split(':');
+  if (hexParts.length === 2 &&
+      /^[0-9a-f]{1,4}$/.test(hexParts[0]) &&
+      /^[0-9a-f]{1,4}$/.test(hexParts[1])) {
+    const hi = parseInt(hexParts[0], 16);
+    const lo = parseInt(hexParts[1], 16);
+    if (Number.isNaN(hi) || Number.isNaN(lo)) return null;
+    return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+  }
+
+  return null;
+}
+
+/**
+ * Extracts an IPv4 string from an IPv6-mapped address (::ffff:x.x.x.x or
+ * ::ffff:XXXX:YYYY hex form). Returns null when the address is not IPv4-mapped.
+ */
+function ipv4FromMappedIPv6(normalized: string): string | null {
+  const prefixes = [
+    '::ffff:',
+    '0:0:0:0:0:ffff:',
+    '0000:0000:0000:0000:0000:ffff:',
+  ];
+  for (const prefix of prefixes) {
+    if (normalized.startsWith(prefix)) {
+      return parseMappedIPv4Rest(normalized.slice(prefix.length));
+    }
+  }
+  return null;
+}
+
 function isPrivateIPv6(ip: string): boolean {
   const normalized = ip.toLowerCase();
   // ::1 (loopback)
@@ -180,23 +222,10 @@ function isPrivateIPv6(ip: string): boolean {
   if (normalized.startsWith('fe80')) return true;
   // :: (unspecified)
   if (normalized === '::' || normalized === '0000:0000:0000:0000:0000:0000:0000:0000') return true;
-  // IPv6-mapped IPv4: ::ffff:x.x.x.x
-  const v4MappedMatch = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (v4MappedMatch) {
-    return isPrivateIPv4(v4MappedMatch[1]);
-  }
-  // Also handle full form: 0000:0000:0000:0000:0000:ffff:XXYY:ZZWW
-  if (normalized.startsWith('0000:0000:0000:0000:0000:ffff:')) {
-    const hexPart = normalized.slice('0000:0000:0000:0000:0000:ffff:'.length);
-    const hexParts = hexPart.split(':');
-    if (hexParts.length === 2) {
-      const a = parseInt(hexParts[0].slice(0, 2), 16);
-      const b = parseInt(hexParts[0].slice(2, 4), 16);
-      const c = parseInt(hexParts[1].slice(0, 2), 16);
-      const d = parseInt(hexParts[1].slice(2, 4), 16);
-      return isPrivateIPv4(`${a}.${b}.${c}.${d}`);
-    }
-  }
+
+  const mappedV4 = ipv4FromMappedIPv6(normalized);
+  if (mappedV4) return isPrivateIPv4(mappedV4);
+
   return false;
 }
 

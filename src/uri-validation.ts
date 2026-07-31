@@ -5,10 +5,19 @@ export type UriSecurityResult =
   | { valid: true; parsed: URL }
   | { valid: false; reason: string };
 
+/** Schemes that must never be used as OAuth redirect URIs. */
+const FORBIDDEN_REDIRECT_SCHEMES = new Set([
+  'javascript',
+  'data',
+  'vbscript',
+  'file',
+  'blob',
+]);
+
 /**
  * Validates a redirect URI for security issues common to all OAuth flows.
- * Checks: parseability, fragment presence, control characters, userinfo.
- * Does NOT enforce scheme restrictions (custom/private-use schemes are valid per RFC 8252 §7.1).
+ * Checks: parseability, forbidden schemes, fragment, control characters, userinfo.
+ * Custom/private-use schemes remain allowed (RFC 8252 §7.1).
  */
 export function validateRedirectUriSecurity(uri: string): UriSecurityResult {
   if (CONTROL_CHAR_RE.test(uri)) {
@@ -20,6 +29,11 @@ export function validateRedirectUriSecurity(uri: string): UriSecurityResult {
     parsed = new URL(uri);
   } catch {
     return { valid: false, reason: 'not a valid URI' };
+  }
+
+  const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
+  if (FORBIDDEN_REDIRECT_SCHEMES.has(scheme)) {
+    return { valid: false, reason: `scheme "${scheme}" is not allowed` };
   }
 
   if (parsed.hash) {
@@ -51,9 +65,49 @@ export function validateResourceUri(uri: string): UriSecurityResult {
 }
 
 /**
+ * Trailing-`*` redirect patterns matched via URL components (exact host;
+ * never domain-extension). Forms:
+ * - `http://host*` / `http://host:*` — any port, any path
+ * - `https://host/path*` — path prefix (port any unless pattern has an explicit port)
+ * - `https://host:8443/cb*` — fixed port + path prefix
+ */
+function matchesRedirectWildcard(uri: URL, pattern: string): boolean {
+  let raw = pattern.slice(0, -1); // strip trailing *
+  let anyPort = !/:\/\/[^/]+:\d+/i.test(raw); // explicit :port in pattern → fixed
+
+  // `http://localhost:*` → parse as `http://localhost` with any port
+  if (/^[a-z][a-z0-9+.-]*:\/\/[^/]+:$/i.test(raw)) {
+    raw = raw.slice(0, -1);
+    anyPort = true;
+  }
+
+  let pat: URL;
+  try {
+    pat = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (!pat.hostname || pat.username || pat.password || pat.hash) return false;
+
+  if (uri.protocol !== pat.protocol) return false;
+  if (uri.hostname.toLowerCase() !== pat.hostname.toLowerCase()) return false;
+  if (!anyPort && uri.port !== pat.port) return false;
+
+  // No path in pattern (root host wildcard) → any path; else pathname prefix.
+  // `new URL('http://host').pathname` is `/`, so detect via the raw string.
+  const hostEnd = raw.indexOf('://') + 3;
+  const hasPath = raw.includes('/', hostEnd);
+  if (!hasPath) return true;
+
+  const prefix = pat.pathname;
+  return uri.pathname.startsWith(prefix) ||
+    (prefix.endsWith('/') && uri.pathname === prefix.slice(0, -1));
+}
+
+/**
  * Validates a redirect URI against a list of allowed patterns.
  * Applies security pre-checks first, then matches against patterns.
- * Pattern format: trailing `*` = prefix match, otherwise exact match.
+ * Trailing `*` = host-aware wildcard; otherwise exact string match.
  */
 export function matchesRedirectPattern(uri: string, patterns: string[]): PatternMatchResult {
   const securityCheck = validateRedirectUriSecurity(uri);
@@ -63,14 +117,9 @@ export function matchesRedirectPattern(uri: string, patterns: string[]): Pattern
 
   for (const pattern of patterns) {
     if (pattern.endsWith('*')) {
-      const prefix = pattern.slice(0, -1);
-      if (uri.startsWith(prefix)) {
-        return { allowed: true };
-      }
-    } else {
-      if (uri === pattern) {
-        return { allowed: true };
-      }
+      if (matchesRedirectWildcard(securityCheck.parsed, pattern)) return { allowed: true };
+    } else if (uri === pattern) {
+      return { allowed: true };
     }
   }
 
