@@ -285,7 +285,7 @@ describe('createUpstreamProbe', () => {
   }
 
   it('updates health on successful probe', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(null, { status: 200 }),
     );
     const health = makeHealth();
@@ -294,6 +294,10 @@ describe('createUpstreamProbe', () => {
     expect(health.lastSuccessAt).toBeGreaterThan(0);
     expect(health.usingFallback).toBe(false);
     expect(health.lastError).toBeNull();
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ method: 'HEAD', redirect: 'error' }),
+    );
   });
 
   it('updates health on failed probe', async () => {

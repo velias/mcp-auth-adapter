@@ -25,6 +25,7 @@ async function fetchUpstreamWellKnown(
     const url = `${issuerUrl}${path}`;
     try {
       const response = await fetch(url, {
+        redirect: 'error',
         signal: AbortSignal.timeout(WELL_KNOWN_FETCH_TIMEOUT_MS),
       });
       if (!response.ok) {

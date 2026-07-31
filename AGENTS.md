@@ -246,7 +246,10 @@ Authorize proxy (RFC 9207 iss + scopes + resource): `MCP_PROXY_AUTH_STATE_SECRET
 (optional, for key rotation), `MCP_PROXY_AUTH_STATE_TTL_MINUTES` (default 30),
 `MCP_PROXY_AUTH_ALLOWED_REDIRECT_URIS` (required when authorize proxy is active
 unless CIMD-only, or all `MCP_PROXY_DCR_CLIENT_NAME_MAP` entries have per-client
-`allowed_redirect_uris` and no fallback `MCP_PROXY_DCR_CLIENT_ID`),
+`allowed_redirect_uris` and no fallback `MCP_PROXY_DCR_CLIENT_ID`; trailing `*`
+= host-aware wildcard — exact hostname, optional port/path constraints; root
+forms like `http://host*` / `http://host:*` allow any port and path, never
+domain extensions),
 `MCP_PROXY_AUTH_SCOPES_REMOVED` / `MCP_PROXY_AUTH_SCOPES_PRESERVED`,
 `MCP_PROXY_AUTH_REQUIRE_RESOURCE`, `MCP_PROXY_AUTH_ALLOWED_RESOURCES`
 (comma-separated URI patterns — trailing `*` = path prefix match, `*.domain.com`

@@ -6,7 +6,12 @@ import {
   validateRedirectUri,
   sanitizeForError,
 } from './cimd';
-import { matchesRedirectPattern, checkAndMatchResource, ResourceConfig } from './uri-validation';
+import {
+  matchesRedirectPattern,
+  checkAndMatchResource,
+  validateRedirectUriSecurity,
+  ResourceConfig,
+} from './uri-validation';
 import { signState } from './state-signer';
 
 export interface AuthScopeConfig {
@@ -173,18 +178,35 @@ export async function applyAuthorizationRequestTransforms(
     }
 
     const redirectUri = params.get('redirect_uri');
-    if (redirectUri && !validateRedirectUri(redirectUri, cimdDoc)) {
-      logger.warn(`${logPrefix}: CIMD redirect_uri mismatch`, {
-        clientId: truncateClientIdForLog(clientId),
-        uri: truncateUriForLog(redirectUri),
-      });
-      return reject(
-        400,
-        'invalid_request',
-        'redirect_uri does not match any registered URI in the CIMD metadata document',
-        'cimd_redirect_uri_mismatch',
-        resourceLabel,
-      );
+    if (redirectUri) {
+      const uriSecurity = validateRedirectUriSecurity(redirectUri);
+      if (!uriSecurity.valid) {
+        logger.warn(`${logPrefix}: CIMD redirect_uri failed security checks`, {
+          clientId: truncateClientIdForLog(clientId),
+          uri: truncateUriForLog(redirectUri),
+          reason: uriSecurity.reason,
+        });
+        return reject(
+          400,
+          'invalid_request',
+          `redirect_uri ${uriSecurity.reason}`,
+          'cimd_redirect_uri_invalid',
+          resourceLabel,
+        );
+      }
+      if (!validateRedirectUri(redirectUri, cimdDoc)) {
+        logger.warn(`${logPrefix}: CIMD redirect_uri mismatch`, {
+          clientId: truncateClientIdForLog(clientId),
+          uri: truncateUriForLog(redirectUri),
+        });
+        return reject(
+          400,
+          'invalid_request',
+          'redirect_uri does not match any registered URI in the CIMD metadata document',
+          'cimd_redirect_uri_mismatch',
+          resourceLabel,
+        );
+      }
     }
 
     params.set('client_id', upstreamClientId);

@@ -172,6 +172,39 @@ describe('validateCimdDocument', () => {
     expect(result).toEqual({ valid: false, reason: 'redirect_uris[1] is not a string' });
   });
 
+  it('rejects redirect_uris with fragment', () => {
+    const result = validateCimdDocument({
+      client_id: url,
+      redirect_uris: ['http://127.0.0.1:8080/callback#frag'],
+    }, url);
+    expect(result).toEqual({
+      valid: false,
+      reason: 'redirect_uris[0] must not contain a fragment',
+    });
+  });
+
+  it('rejects redirect_uris with userinfo', () => {
+    const result = validateCimdDocument({
+      client_id: url,
+      redirect_uris: ['http://user:pass@evil.com/callback'],
+    }, url);
+    expect(result).toEqual({
+      valid: false,
+      reason: 'redirect_uris[0] must not contain userinfo',
+    });
+  });
+
+  it('rejects javascript: redirect_uris', () => {
+    const result = validateCimdDocument({
+      client_id: url,
+      redirect_uris: ['javascript:alert(1)'],
+    }, url);
+    expect(result).toEqual({
+      valid: false,
+      reason: 'redirect_uris[0] scheme "javascript" is not allowed',
+    });
+  });
+
   it('rejects forbidden token_endpoint_auth_method: client_secret_post', () => {
     const result = validateCimdDocument({
       client_id: url,
@@ -333,8 +366,18 @@ describe('isPrivateIP', () => {
     expect(isPrivateIP('::ffff:100.64.0.1')).toBe(true);
   });
 
+  it('detects IPv6-mapped IPv4 private addresses in hex form', () => {
+    expect(isPrivateIP('::ffff:7f00:1')).toBe(true);       // 127.0.0.1
+    expect(isPrivateIP('::ffff:0a00:1')).toBe(true);       // 10.0.0.1
+    expect(isPrivateIP('::ffff:c0a8:1')).toBe(true);       // 192.168.0.1
+    expect(isPrivateIP('::ffff:a9fe:1')).toBe(true);       // 169.254.0.1
+    expect(isPrivateIP('0:0:0:0:0:ffff:7f00:1')).toBe(true);
+    expect(isPrivateIP('0000:0000:0000:0000:0000:ffff:0a00:0001')).toBe(true);
+  });
+
   it('allows IPv6-mapped IPv4 public addresses', () => {
     expect(isPrivateIP('::ffff:8.8.8.8')).toBe(false);
+    expect(isPrivateIP('::ffff:0808:0808')).toBe(false); // 8.8.8.8 hex
   });
 });
 

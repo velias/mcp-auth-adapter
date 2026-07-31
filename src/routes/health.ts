@@ -33,10 +33,12 @@ export function createUpstreamProbe(
     try {
       const response = await fetch(probeUrl, {
         method: 'HEAD',
+        redirect: 'error',
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (response.status === 405) {
         const getResponse = await fetch(probeUrl, {
+          redirect: 'error',
           signal: AbortSignal.timeout(timeoutMs),
         });
         if (!getResponse.ok) {
