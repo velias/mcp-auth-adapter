@@ -340,7 +340,7 @@ The adapter is compatible with the [Enterprise-Managed Authorization extension](
 
 The adapter does not validate or inspect ID-JAG assertions — that is the upstream authorization server's responsibility.
 
-**Requirements**: The upstream IdP must support JWT bearer assertions (RFC 7523) and be configured to validate ID-JAG tokens from the enterprise IdP. No adapter-specific configuration is needed.
+**Requirements**: The upstream IdP must support JWT bearer assertions (RFC 7523) and be configured to validate ID-JAG tokens from the enterprise IdP. No adapter-specific configuration is needed. ID-JAG assertions use the same JWT `aud` rules as other bearer assertions — see [JWT Bearer Assertion `aud` Caveat](#jwt-bearer-assertion-aud-caveat).
 
 ## CIMD Adapter (EXPERIMENTAL)
 
@@ -399,6 +399,7 @@ Token validation in the MCP Server:
 
 1. **JWKS signature verification** — the adapter's discovery metadata `jwks_uri` points to the upstream IdP's JWKS, so signature verification cryptographically proves the token's origin correctly. Discovery metadata can, and should, be used here to get `jwks_uri`. This is OAuth compliant token origin verification behaviour.
 2. **Validate `iss` claim against the upstream IdP URL** — JWT `iss` claim validation is required by the OIDC spec. If you want this behaviour, explicitly configure the MCP server with **upstream IdP issuer** and validate against this configuration, do not validate against `issuer` from the discovery metadata.
+3. **Validate `aud` (or equivalent) against what the IdP actually emits** — configure the MCP server for the upstream IdP's audience claim shape; do not require `aud` to equal `MCP_BASE_URL` or this adapter's identity as MCP spec requires as many IdPs do not support it. The adapter does not rewrite token `aud` in the token to make it MCP Spec compatible, as it is signed by IdP.
 
 ## Known MCP Client Behaviors
 
