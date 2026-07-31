@@ -5,6 +5,22 @@ This file is auto-generated from [GitHub Releases](https://github.com/velias/mcp
 
 ---
 
+## [v2.4.0](https://github.com/velias/mcp-auth-adapter/releases/tag/v2.4.0) — 2026-07-31
+
+### Features
+* DPoP (RFC 9449) support added if upstream IdP supports it by @velias in https://github.com/velias/mcp-auth-adapter/pull/61
+* PAR (RFC 9126) support added if upstream IdP advertises it by @velias in https://github.com/velias/mcp-auth-adapter/pull/62
+* Hardened OAuth redirect handling and outbound fetches against open-redirect / SSRF class issues. by @velias in https://github.com/velias/mcp-auth-adapter/pull/67
+  * Reject HTTP redirects when fetching upstream well-known and health probes (redirect: 'error')
+  * Validate CIMD redirect_uris (and authorize/PAR CIMD redirects) with shared URI security checks; block dangerous schemes (javascript:, data:, etc.)
+  * Make redirect allowlist wildcards host-aware: http://host/* / http://host/:* still allow any port/path, but domain-extension matches (host.evil.com) are rejected
+  * Treat IPv6-mapped private addresses in hex form (::ffff:7f00:1) as private for CIMD SSRF checks
+
+
+**Full Changelog**: https://github.com/velias/mcp-auth-adapter/compare/v2.3.0...v2.4.0
+
+---
+
 ## [v2.3.0](https://github.com/velias/mcp-auth-adapter/releases/tag/v2.3.0) — 2026-07-13
 
 ### Features
@@ -13,9 +29,6 @@ This file is auto-generated from [GitHub Releases](https://github.com/velias/mcp
 * Composite health check added by @velias in https://github.com/velias/mcp-auth-adapter/pull/49
 
 ### Other Changes
-* Bump github/codeql-action/upload-sarif from 4.36.3 to 4.37.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/44
-* Bump docker/login-action from 4.3.0 to 4.4.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/45
-* Bump docker/metadata-action from 6.1.0 to 6.2.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/46
 * Bump the dev-dependencies group across 1 directory with 5 updates by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/50
 
 **Full Changelog**: https://github.com/velias/mcp-auth-adapter/compare/v2.2.1...v2.3.0
@@ -31,13 +44,7 @@ This file is auto-generated from [GitHub Releases](https://github.com/velias/mcp
 ### Features
 * Logged values are always quoted for consistent parsing by @velias in https://github.com/velias/mcp-auth-adapter/pull/43
 ### Other Changes
-* Bump docker/login-action from 4.2.0 to 4.3.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/40
 * Bump the dev-dependencies group with 3 updates by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/42
-* Bump MishaKav/jest-coverage-comment from 1.0.33 to 1.0.34 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/37
-* Bump github/codeql-action/upload-sarif from 4.36.2 to 4.36.3 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/39
-* Bump docker/build-push-action from 7.2.0 to 7.3.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/41
-* Bump docker/setup-buildx-action from 4.1.0 to 4.2.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/38
-
 
 **Full Changelog**: https://github.com/velias/mcp-auth-adapter/compare/v2.2.0...v2.2.1
 
@@ -51,8 +58,6 @@ This file is auto-generated from [GitHub Releases](https://github.com/velias/mcp
 * Tests migrated from jest to vitest by @velias in https://github.com/velias/mcp-auth-adapter/pull/32
 * Bump esbuild, @vitest/coverage-v8 and vitest by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/33
 * Bump the dev-dependencies group with 2 updates by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/35
-* Bump softprops/action-gh-release from 3.0.0 to 3.0.1 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/34
-
 
 **Full Changelog**: https://github.com/velias/mcp-auth-adapter/compare/v2.1.0...v2.2.0
 
@@ -69,8 +74,6 @@ This file is auto-generated from [GitHub Releases](https://github.com/velias/mcp
 * Bump the dev-dependencies group with 2 updates by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/24
 * Bump form-data from 4.0.5 to 4.0.6 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/25
 * updated @babel/core dev dependency by @velias in https://github.com/velias/mcp-auth-adapter/pull/26
-* Bump actions/checkout from 6.0.3 to 7.0.0 by @dependabot[bot] in https://github.com/velias/mcp-auth-adapter/pull/28
-
 
 **Full Changelog**: https://github.com/velias/mcp-auth-adapter/compare/v2.0.0...v2.1.0
 
