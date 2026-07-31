@@ -24,11 +24,10 @@ add context, highlight important changes, or remove noise.
 - [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated
   (`gh auth login`) -- used by `npm run changelog` to fetch release notes
 - **npm Trusted Publisher** configured on npmjs.com -- see "Trusted Publisher
-  setup" below. This is the primary publish mechanism: no long-lived npm
-  tokens are stored in GitHub secrets.
-- (Bootstrap only) For the very first publish of a new package, an `NPM_TOKEN`
-  repository secret may be needed -- see "Initial npm token setup (bootstrap)"
-  below.
+  setup" below. Publish uses OIDC only; no `NPM_TOKEN` / `NODE_AUTH_TOKEN`.
+- (Bootstrap only) For the very first publish of a brand-new package name
+  (before a trusted publisher can be attached), see "Initial npm token setup
+  (bootstrap)" below.
 
 ## Steps
 
@@ -87,37 +86,34 @@ and workflow file.
 
 ### Workflow requirements
 
-The release workflow (`.github/workflows/release.yml`) already satisfies the
-requirements:
+The release workflow (`.github/workflows/release.yml`) is set up for OIDC-only
+publish:
 
 - `id-token: write` permission is set on the publish job (required for OIDC
   token generation)
 - `actions/setup-node` is configured with `registry-url: https://registry.npmjs.org`
-- `npm publish --provenance --access public` is used (provenance is
-  automatically generated with trusted publishing, but the explicit flag is
-  harmless)
+- `npm install -g npm@latest` runs before publish (trusted publishing needs
+  npm CLI >= 11.5.1; Node 22's bundled npm is older)
+- Before `npm publish`, the workflow strips `_authToken` from the `.npmrc`
+  written by `setup-node`. An empty `${NODE_AUTH_TOKEN}` line makes npm skip
+  OIDC and fail with `ENEEDAUTH`
+- **Do not set `NODE_AUTH_TOKEN`** on the publish step — even an empty value
+  (or a classic automation token) blocks Trusted Publishing / conflicts with
+  package 2FA rules
+- `npm publish --provenance --access public` is used
 - A **GitHub-hosted runner** (`ubuntu-latest`) is used -- self-hosted runners
   are not supported for trusted publishing
 
-Once the trusted publisher is configured on npmjs.com, the workflow will
-authenticate via OIDC automatically. The npm CLI prefers the OIDC flow when
-available, even if `NODE_AUTH_TOKEN` is also set.
+Once the trusted publisher is configured on npmjs.com, the workflow
+authenticates via OIDC automatically. No GitHub `NPM_TOKEN` secret is needed.
 
-> **Note:** Trusted publishing requires npm CLI >= 11.5.1. If the bundled npm
-> in your Node.js version is older, add `npm install -g npm@latest` before
-> the publish step.
+If you still have a leftover `NPM_TOKEN` secret or an old npm access token from
+earlier token-based publishes, delete them:
 
-### After verification
-
-After confirming that a release publishes successfully via trusted publishing:
-
-1. Remove the `NPM_TOKEN` secret from
+1. Remove `NPM_TOKEN` from
    [GitHub repo secrets](https://github.com/velias/mcp-auth-adapter/settings/secrets/actions)
-2. Remove the `NODE_AUTH_TOKEN` env var from the publish step in `release.yml`
-3. Delete the old Granular Access Token from
+2. Delete unused tokens from
    [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens)
-
-This eliminates token expiration as a maintenance burden entirely.
 
 ## Initial npm token setup (bootstrap)
 
@@ -165,18 +161,32 @@ To rotate:
 
 ### Recovery: re-run a failed release
 
-If a release workflow fails at the `npm publish` step (look for 401/403 in
-the logs):
+If a release workflow fails at the `npm publish` step (look for `ENEEDAUTH`
+or 401/403 in the logs):
 
-1. If using trusted publishing: verify the configuration on npmjs.com matches
-   the workflow exactly (user, repo, filename, case)
-2. If using a token: rotate it (see above)
-3. Go to the failed workflow run in GitHub Actions
-4. Click **"Re-run failed jobs"** -- the workflow will retry `npm publish`
+1. Verify the Trusted Publisher on npmjs.com matches the workflow exactly
+   (user, repo, filename `release.yml`, case)
+2. Confirm the failing run's workflow is the OIDC version (no
+   `NODE_AUTH_TOKEN`, npm upgraded, `_authToken` stripped). A re-run uses the
+   workflow from the **tagged commit** — if you fixed `release.yml` only on
+   `main` after the tag, move the tag to a commit that includes the fix:
 
-The git tag and version bump are already in place, so no need to re-tag. The
-GitHub Release may or may not have been created depending on which step failed --
-if it was created, it stays; if not, the re-run will create it.
+   ```bash
+   git checkout main
+   git pull
+   git tag -d vX.Y.Z
+   git push origin :refs/tags/vX.Y.Z
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+3. If the tagged commit already has the correct workflow, open the failed run
+   in GitHub Actions and click **"Re-run failed jobs"**
+
+The version bump is already in place; only re-tag when the workflow file on
+the tagged commit itself must change. The GitHub Release may or may not have
+been created depending on which step failed -- if it was created, it stays;
+if not, the new run will create it.
 
 ## Hotfix
 

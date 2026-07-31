@@ -20,13 +20,22 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
+      # Trusted publishing requires npm >= 11.5.1 (Node 22 ships an older npm).
+      - run: npm install -g npm@latest
       - run: npm ci
       - run: npm run lint
       - run: npm test
       - run: npm run build
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # setup-node writes _authToken=${NODE_AUTH_TOKEN} into .npmrc; an empty
+      # value blocks the OIDC exchange. Strip it so Trusted Publishing is used.
+      # Do not set NODE_AUTH_TOKEN — even an empty value prevents OIDC.
+      - name: Publish to npm
+        run: |
+          npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ -f "$npmrc" ]; then
+            sed -i '/_authToken/d' "$npmrc"
+          fi
+          npm publish --provenance --access public
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           generate_release_notes: true
